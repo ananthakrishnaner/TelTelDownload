@@ -10,9 +10,9 @@ const ProtectedRoute = ({ children }) => {
   if (!token) return <Navigate to="/login" replace />;
   
   return (
-    <div className="flex h-screen bg-gray-900 text-white overflow-hidden">
+    <div className="flex flex-col md:flex-row h-screen bg-gray-900 text-white overflow-hidden">
       <Sidebar />
-      <div className="flex-1 overflow-auto bg-gray-900/95">
+      <div className="flex-1 overflow-auto bg-gray-900/95 relative z-0">
         {children}
       </div>
     </div>
