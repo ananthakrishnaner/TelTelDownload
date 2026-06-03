@@ -460,6 +460,30 @@ async function bulkForwardLocalMedia(mediaIds, targetGroupId) {
   return uploadedCount;
 }
 
+function getActiveJobs() {
+  return Array.from(activeJobs.values()).map(job => ({
+    id: job.id,
+    type: job.type,
+    groupId: job.groupId,
+    status: job.status,
+    progress: job.progress,
+    total: job.total,
+    startedAt: job.startedAt
+  }));
+}
+
+function stopJob(jobId) {
+  if (activeJobs.has(jobId)) {
+    const job = activeJobs.get(jobId);
+    if (job.abortController) {
+      job.abortController.abort();
+    }
+    job.status = 'aborted';
+    return true;
+  }
+  return false;
+}
+
 module.exports = {
   initClient,
   sendCode,
