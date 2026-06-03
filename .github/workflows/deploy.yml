@@ -35,6 +35,10 @@ jobs:
             docker stop teltel_backend teltel_frontend teltel_nginx teltel_mongo || true
             docker rm teltel_backend teltel_frontend teltel_nginx teltel_mongo || true
             
+            # Install and Run Certbot for Let's Encrypt SSL
+            apt-get update && apt-get install -y certbot
+            certbot certonly --standalone -d telegram.ananthakrishnan.icu --non-interactive --agree-tos -m hacknoob162@gmail.com --keep-until-expiring
+            
             docker-compose up -d --build
             
             # Print status to the deployment log
