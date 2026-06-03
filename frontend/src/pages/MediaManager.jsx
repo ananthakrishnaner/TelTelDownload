@@ -64,10 +64,11 @@ export default function MediaManager() {
         // Single forward
         await api.post(`/media/${forwardModal.mediaId}/forward`, { targetGroupId: forwardModal.targetGroupId });
       } else {
-        // Bulk forward
-        for (const id of selectedMediaIds) {
-          await api.post(`/media/${id}/forward`, { targetGroupId: forwardModal.targetGroupId });
-        }
+        // Bulk forward via single backend job
+        await api.post(`/media/bulk-forward`, { 
+          mediaIds: selectedMediaIds, 
+          targetGroupId: forwardModal.targetGroupId 
+        });
       }
       alert('Forwarding initiated!');
       setForwardModal({ show: false, mediaId: null, targetGroupId: '' });

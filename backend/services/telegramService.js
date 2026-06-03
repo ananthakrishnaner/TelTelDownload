@@ -392,6 +392,74 @@ async function forwardLocalMedia(mediaId, targetGroupId) {
   return true;
 }
 
+async function bulkForwardLocalMedia(mediaIds, targetGroupId) {
+  if (!client) await initClient();
+  const io = socket.getIO();
+  const jobId = uuidv4();
+  const abortController = new AbortController();
+
+  activeJobs.set(jobId, {
+    id: jobId,
+    type: 'bulk_upload',
+    groupId: targetGroupId,
+    status: 'running',
+    progress: 0,
+    total: mediaIds.length,
+    startedAt: Date.now(),
+    abortController
+  });
+
+  let uploadedCount = 0;
+  for (const mediaId of mediaIds) {
+    if (abortController.signal.aborted) break;
+
+    try {
+      const media = await Media.findById(mediaId);
+      if (!media || !fs.existsSync(media.localPath)) {
+        uploadedCount++;
+        activeJobs.get(jobId).progress = uploadedCount;
+        io.emit('job_progress', { jobId, groupId: targetGroupId, progress: uploadedCount, total: mediaIds.length });
+        continue;
+      }
+
+      io.emit('progress', { type: 'upload', groupId: targetGroupId, msgId: media.telegramMessageId, fileName: media.fileName, progress: 0 });
+      const targetEntity = await client.getEntity(targetGroupId);
+      await client.sendFile(targetEntity, {
+        file: media.localPath,
+        caption: media.caption || '',
+        progressCallback: (uploaded, total) => {
+          const percentage = Math.round((Number(uploaded) / Number(total)) * 100);
+          io.emit('progress', { type: 'upload', groupId: targetGroupId, msgId: media.telegramMessageId, fileName: media.fileName, progress: percentage });
+        }
+      });
+
+      media.status = 'uploaded_to_group';
+      media.uploadedAt = Date.now();
+      await media.save();
+      io.emit('progress', { type: 'upload_complete', groupId: targetGroupId, msgId: media.telegramMessageId, fileName: media.fileName });
+      
+      try {
+        fs.unlinkSync(media.localPath);
+        media.status = 'deleted_locally';
+        await media.save();
+      } catch (e) { console.error('Failed to delete file after forward:', e); }
+
+      uploadedCount++;
+      activeJobs.get(jobId).progress = uploadedCount;
+      io.emit('job_progress', { jobId, groupId: targetGroupId, progress: uploadedCount, total: mediaIds.length });
+    } catch (err) {
+      console.error(`Failed to forward media ${mediaId}:`, err);
+    }
+  }
+
+  if (activeJobs.has(jobId)) {
+    const job = activeJobs.get(jobId);
+    job.status = job.status === 'aborted' ? 'aborted' : 'completed';
+    setTimeout(() => activeJobs.delete(jobId), 10000);
+  }
+  return uploadedCount;
+}
+
 module.exports = {
   initClient,
   sendCode,
@@ -400,5 +468,6 @@ module.exports = {
   downloadMediaForGroup,
   getRecentMedia,
   downloadSpecificMedia,
-  forwardLocalMedia
+  forwardLocalMedia,
+  bulkForwardLocalMedia
 };

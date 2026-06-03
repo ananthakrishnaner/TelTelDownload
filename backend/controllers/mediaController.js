@@ -67,6 +67,22 @@ exports.forwardMedia = async (req, res) => {
   }
 };
 
+exports.bulkForwardMedia = async (req, res) => {
+  try {
+    const { mediaIds, targetGroupId } = req.body;
+    const telegramService = require('../services/telegramService');
+    
+    // Launch in background
+    telegramService.bulkForwardLocalMedia(mediaIds, targetGroupId)
+      .then(count => console.log(`Bulk forwarded ${count} items`))
+      .catch(err => console.error(err));
+
+    res.json({ success: true, message: 'Bulk forwarding initiated' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
 exports.getMediaStats = async (req, res) => {
   try {
     const stats = await Media.aggregate([
