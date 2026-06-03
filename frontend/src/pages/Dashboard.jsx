@@ -131,6 +131,14 @@ export default function Dashboard() {
     setSelectedMediaIds(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
   };
 
+  const selectAllMedia = () => {
+    if (selectedMediaIds.length === recentMedia.length) {
+      setSelectedMediaIds([]);
+    } else {
+      setSelectedMediaIds(recentMedia.map(m => m.id));
+    }
+  };
+
   const downloadSpecific = async () => {
     if (selectedMediaIds.length === 0) return;
     try {
@@ -298,7 +306,14 @@ export default function Dashboard() {
           <div className="bg-slate-900 border border-slate-700 rounded-[2rem] p-8 w-full max-w-4xl shadow-2xl flex flex-col h-[80vh]">
             <div className="flex justify-between items-center mb-6">
               <div>
-                <h3 className="text-2xl font-bold text-white">Browse {selectedGroup?.title}</h3>
+                <h3 className="text-2xl font-bold text-white flex items-center gap-4">
+                  Browse {selectedGroup?.title}
+                  {recentMedia.length > 0 && (
+                    <button onClick={selectAllMedia} className="text-xs px-3 py-1 bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 rounded-lg transition-colors border border-blue-500/30">
+                      {selectedMediaIds.length === recentMedia.length ? 'Deselect All' : 'Select All'}
+                    </button>
+                  )}
+                </h3>
                 <p className="text-slate-400 text-sm mt-1">Select specific media to download or auto-forward.</p>
               </div>
               <button onClick={() => setShowMediaModal(false)} className="p-2 text-slate-400 hover:text-white bg-slate-800 rounded-full"><FiX size={24} /></button>
