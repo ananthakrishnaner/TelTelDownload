@@ -31,9 +31,8 @@ jobs:
             git pull origin main
             echo "ADMIN_USERNAME=${{ secrets.ADMIN_USERNAME }}" > .env
             echo "ADMIN_PASSWORD=${{ secrets.ADMIN_PASSWORD }}" >> .env
-            # Bypass docker-compose 1.29.2 ContainerConfig bug by removing old containers first
-            docker stop teltel_backend teltel_frontend teltel_nginx teltel_mongo || true
-            docker rm teltel_backend teltel_frontend teltel_nginx teltel_mongo || true
+            # Bypass docker-compose 1.29.2 ContainerConfig bug by removing all old containers first
+            docker rm -f $(docker ps -aq) || true
             
             # Install and Run Certbot for Let's Encrypt SSL
             apt-get update && apt-get install -y certbot
