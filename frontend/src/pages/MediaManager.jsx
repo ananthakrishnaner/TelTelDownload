@@ -1,14 +1,26 @@
 import React, { useState, useEffect } from 'react';
 import api from '../services/api';
-import { FiImage, FiVideo, FiTrash2, FiRefreshCcw, FiExternalLink, FiSend } from 'react-icons/fi';
+import { FiImage, FiVideo, FiTrash2, FiRefreshCcw, FiExternalLink, FiSend, FiX } from 'react-icons/fi';
 
 export default function MediaManager() {
   const [media, setMedia] = useState([]);
+  const [groups, setGroups] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [forwardModal, setForwardModal] = useState({ show: false, mediaId: null, targetGroupId: '' });
 
   useEffect(() => {
     fetchMedia();
+    fetchGroups();
   }, []);
+
+  const fetchGroups = async () => {
+    try {
+      const res = await api.get('/telegram/groups');
+      setGroups(res.data.groups || []);
+    } catch (err) {
+      console.error(err);
+    }
+  };
 
   const fetchMedia = async () => {
     try {
@@ -40,12 +52,16 @@ export default function MediaManager() {
     }
   };
 
-  const handleForward = async (id) => {
-    const target = prompt('Enter Destination Group ID to forward this media to:');
-    if (!target) return;
+  const openForwardModal = (id) => {
+    setForwardModal({ show: true, mediaId: id, targetGroupId: groups[0]?.id || '' });
+  };
+
+  const confirmForward = async () => {
+    if (!forwardModal.targetGroupId) return;
     try {
-      await api.post(`/media/${id}/forward`, { targetGroupId: target });
+      await api.post(`/media/${forwardModal.mediaId}/forward`, { targetGroupId: forwardModal.targetGroupId });
       alert('Forwarding initiated!');
+      setForwardModal({ show: false, mediaId: null, targetGroupId: '' });
     } catch (err) {
       alert('Failed: ' + err.message);
     }
@@ -90,7 +106,7 @@ export default function MediaManager() {
                   <FiExternalLink size={20} />
                 </a>
                 <div className="flex space-x-2">
-                  <button onClick={() => handleForward(item._id)} className="p-2 text-slate-400 hover:text-purple-400 hover:bg-purple-500/10 rounded-lg transition-colors" title="Forward to Group">
+                  <button onClick={() => openForwardModal(item._id)} className="p-2 text-slate-400 hover:text-purple-400 hover:bg-purple-500/10 rounded-lg transition-colors" title="Forward to Group">
                     <FiSend size={20} />
                   </button>
                   {item.status === 'failed' && (
@@ -110,6 +126,37 @@ export default function MediaManager() {
       {media.length === 0 && !loading && (
         <div className="text-center p-20 text-slate-500 font-medium text-lg">
           No media in vault.
+        </div>
+      )}
+
+      {forwardModal.show && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-[2rem] p-8 w-full max-w-md shadow-2xl">
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="text-2xl font-bold text-white">Forward Media</h3>
+              <button onClick={() => setForwardModal({ show: false, mediaId: null, targetGroupId: '' })} className="p-2 text-slate-400 hover:text-white bg-slate-800 rounded-full"><FiX size={24} /></button>
+            </div>
+            <p className="text-slate-400 text-sm mb-6">Select a destination group to forward this media to.</p>
+            <div className="space-y-4 mb-6">
+              <div>
+                <label className="block text-xs font-bold text-slate-400 mb-2 uppercase tracking-wide">Destination Group</label>
+                <select 
+                  value={forwardModal.targetGroupId} 
+                  onChange={e => setForwardModal({...forwardModal, targetGroupId: e.target.value})}
+                  className="w-full bg-slate-800 border border-slate-600 rounded-xl p-3 text-white focus:ring-2 focus:ring-purple-500"
+                >
+                  <option value="" disabled>Select a group...</option>
+                  {groups.map(g => (
+                    <option key={g.id} value={g.id}>{g.title} ({g.id})</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <div className="flex space-x-3">
+              <button onClick={() => setForwardModal({ show: false, mediaId: null, targetGroupId: '' })} className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-white rounded-xl font-medium transition-colors">Cancel</button>
+              <button onClick={confirmForward} className="flex-1 py-3 bg-purple-600 hover:bg-purple-500 text-white rounded-xl font-medium transition-colors">Forward</button>
+            </div>
+          </div>
         </div>
       )}
     </div>

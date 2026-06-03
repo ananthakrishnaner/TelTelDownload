@@ -23,6 +23,9 @@ export default function Dashboard() {
   const [cronExp, setCronExp] = useState('0 * * * *');
   const [targetGroup, setTargetGroup] = useState('');
   
+  // Manual Pull Form
+  const [manualDownloadModal, setManualDownloadModal] = useState({ show: false, sourceGroupId: null, targetGroupId: '' });
+  
   // Browse Media Form
   const [recentMedia, setRecentMedia] = useState([]);
   const [selectedMediaIds, setSelectedMediaIds] = useState([]);
@@ -71,10 +74,14 @@ export default function Dashboard() {
     }
   };
 
-  const handleManualDownload = async (groupId) => {
-    const target = prompt('Optional: Enter a Destination Group ID to Auto-Upload to (leave blank to just download):');
+  const handleManualDownload = (groupId) => {
+    setManualDownloadModal({ show: true, sourceGroupId: groupId, targetGroupId: '' });
+  };
+
+  const confirmManualDownload = async () => {
     try {
-      await api.post('/telegram/download', { groupId, targetGroupId: target || null });
+      await api.post('/telegram/download', { groupId: manualDownloadModal.sourceGroupId, targetGroupId: manualDownloadModal.targetGroupId || null });
+      setManualDownloadModal({ show: false, sourceGroupId: null, targetGroupId: '' });
     } catch (err) {
       alert('Error: ' + err.message);
     }
@@ -345,7 +352,16 @@ export default function Dashboard() {
 
             <div className="mt-6 flex flex-col md:flex-row gap-4">
               <div className="flex-1 relative">
-                <input type="text" placeholder="Optional: Destination Group ID to Auto-Upload" value={targetGroup} onChange={e => setTargetGroup(e.target.value)} className="w-full bg-slate-800 border border-slate-600 rounded-xl p-3 text-white focus:ring-2 focus:ring-blue-500" />
+                <select 
+                  value={targetGroup} 
+                  onChange={e => setTargetGroup(e.target.value)} 
+                  className="w-full bg-slate-800 border border-slate-600 rounded-xl p-3 text-white focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="">No Auto-Upload (Download Only)</option>
+                  {groups.map(g => (
+                    <option key={g.id} value={g.id}>{g.title} ({g.id})</option>
+                  ))}
+                </select>
               </div>
               <button 
                 onClick={downloadSpecific} 
@@ -359,6 +375,36 @@ export default function Dashboard() {
         </div>
       )}
 
+      {manualDownloadModal.show && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-[2rem] p-8 w-full max-w-md shadow-2xl">
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="text-2xl font-bold text-white">Pull Entire Group</h3>
+              <button onClick={() => setManualDownloadModal({ show: false, sourceGroupId: null, targetGroupId: '' })} className="p-2 text-slate-400 hover:text-white bg-slate-800 rounded-full"><FiX size={24} /></button>
+            </div>
+            <p className="text-slate-400 text-sm mb-6">Optional: Select a destination group to auto-forward media after downloading.</p>
+            <div className="space-y-4 mb-6">
+              <div>
+                <label className="block text-xs font-bold text-slate-400 mb-2 uppercase tracking-wide">Destination Group</label>
+                <select 
+                  value={manualDownloadModal.targetGroupId} 
+                  onChange={e => setManualDownloadModal({...manualDownloadModal, targetGroupId: e.target.value})}
+                  className="w-full bg-slate-800 border border-slate-600 rounded-xl p-3 text-white focus:ring-2 focus:ring-purple-500"
+                >
+                  <option value="">No Auto-Upload (Download Only)</option>
+                  {groups.map(g => (
+                    <option key={g.id} value={g.id}>{g.title} ({g.id})</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <div className="flex space-x-3">
+              <button onClick={() => setManualDownloadModal({ show: false, sourceGroupId: null, targetGroupId: '' })} className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-white rounded-xl font-medium transition-colors">Cancel</button>
+              <button onClick={confirmManualDownload} className="flex-1 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-medium transition-colors">Start Pull</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
