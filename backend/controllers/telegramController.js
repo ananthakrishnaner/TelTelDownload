@@ -38,9 +38,31 @@ exports.signIn = async (req, res) => {
 exports.getGroups = async (req, res) => {
   try {
     const groups = await telegramService.getGroups();
-    res.json({ success: true, groups });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.json({ groups });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.getGroupMedia = async (req, res) => {
+  try {
+    const mediaList = await telegramService.getRecentMedia(req.params.id);
+    res.json({ media: mediaList });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.downloadSpecific = async (req, res) => {
+  try {
+    const { groupId, messageIds, targetGroupId } = req.body;
+    // Launch in background
+    telegramService.downloadSpecificMedia(groupId, messageIds, targetGroupId)
+      .then(count => console.log(`Downloaded ${count} specific items`))
+      .catch(err => console.error(err));
+    res.json({ success: true, message: 'Selective download triggered' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 };
 

@@ -3,8 +3,12 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const path = require('path');
+const http = require('http');
 
 const app = express();
+const server = http.createServer(app);
+const io = require('./socket').init(server);
+
 const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/teltel';
 
@@ -26,11 +30,17 @@ mongoose.connect(MONGO_URI)
 app.use('/api/admin', require('./routes/adminRoutes'));
 app.use('/api/telegram', require('./routes/telegramRoutes'));
 app.use('/api/scheduler', require('./routes/schedulerRoutes'));
+app.use('/api/media', require('./routes/mediaRoutes'));
+app.use('/api/system', require('./routes/systemRoutes'));
 
 app.get('/', (req, res) => {
   res.send('TelTel API Running');
 });
 
-app.listen(PORT, () => {
+io.on('connection', socket => {
+  console.log('Client connected to WebSockets');
+});
+
+server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });

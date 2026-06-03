@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import api from '../services/api';
-import { FiSmartphone, FiKey, FiLock, FiShield, FiCheckCircle } from 'react-icons/fi';
+import { FiSmartphone, FiKey, FiLock, FiShield, FiCheckCircle, FiSave, FiSettings as FiSettingsIcon } from 'react-icons/fi';
 
 export default function Settings() {
   const [apiId, setApiId] = useState('');
@@ -13,6 +13,34 @@ export default function Settings() {
   
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
+  const [configLoading, setConfigLoading] = useState(true);
+
+  useEffect(() => {
+    fetchConfig();
+  }, []);
+
+  const fetchConfig = async () => {
+    try {
+      const res = await api.get('/system/settings');
+      if (res.data.apiId) setApiId(res.data.apiId);
+      if (res.data.apiHash) setApiHash(res.data.apiHash);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setConfigLoading(false);
+    }
+  };
+
+  const saveConfig = async () => {
+    setLoading(true);
+    try {
+      await api.put('/system/settings', { apiId, apiHash });
+      alert('Config saved to database.');
+    } catch (err) {
+      alert('Error saving config');
+    }
+    setLoading(false);
+  };
 
   const saveCreds = async () => {
     setLoading(true);
@@ -51,9 +79,40 @@ export default function Settings() {
       
       <div className="mb-10">
         <h1 className="text-3xl md:text-5xl font-black text-transparent bg-clip-text bg-gradient-to-br from-indigo-300 to-purple-400 tracking-tight mb-2">
-          MTProto Integration
+          System Configuration
         </h1>
-        <p className="text-slate-400 font-medium">Establish a secure, high-throughput connection to Telegram.</p>
+        <p className="text-slate-400 font-medium">Manage your Telegram API credentials and establish MTProto connections.</p>
+      </div>
+
+      <div className="glass-panel p-6 md:p-10 rounded-[2rem] border border-slate-700/50 shadow-2xl relative overflow-hidden mb-8">
+        <div className="absolute -top-32 -left-32 w-96 h-96 bg-blue-600/10 rounded-full mix-blend-screen filter blur-[100px] pointer-events-none"></div>
+        <div className="relative z-10 space-y-8">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-4">
+              <div className="p-3 bg-blue-500/10 rounded-2xl text-blue-400 border border-blue-500/20">
+                <FiSettingsIcon size={24} />
+              </div>
+              <div>
+                <h2 className="text-2xl font-bold text-white tracking-tight">Database Config</h2>
+                <p className="text-sm text-slate-400 font-medium mt-1">Credentials stored securely in MongoDB.</p>
+              </div>
+            </div>
+            <button onClick={saveConfig} disabled={loading} className="px-5 py-2.5 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 rounded-xl font-bold transition-all border border-blue-500/30 flex items-center shadow-lg hover:shadow-[0_0_15px_rgba(59,130,246,0.2)]">
+               {loading ? <div className="w-5 h-5 border-2 border-blue-400/30 border-t-blue-400 rounded-full animate-spin mr-2"></div> : <FiSave className="mr-2" />} Save Settings
+            </button>
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            <div>
+              <label className="block text-sm font-semibold text-slate-300 mb-2 uppercase tracking-wider">APP ID</label>
+              <input type="text" className="w-full px-5 py-4 bg-slate-900/60 border border-slate-700/50 rounded-xl text-white focus:ring-2 focus:ring-blue-500/50 outline-none transition-all shadow-inner font-mono" value={apiId} onChange={e => setApiId(e.target.value)} placeholder="e.g. 1234567" disabled={configLoading} />
+            </div>
+            <div>
+              <label className="block text-sm font-semibold text-slate-300 mb-2 uppercase tracking-wider">API HASH</label>
+              <input type="text" className="w-full px-5 py-4 bg-slate-900/60 border border-slate-700/50 rounded-xl text-white focus:ring-2 focus:ring-blue-500/50 outline-none transition-all shadow-inner font-mono" value={apiHash} onChange={e => setApiHash(e.target.value)} placeholder="e.g. abc123def456..." disabled={configLoading} />
+            </div>
+          </div>
+        </div>
       </div>
 
       <div className="glass-panel p-6 md:p-10 rounded-[2rem] border border-slate-700/50 shadow-2xl relative overflow-hidden">
@@ -64,28 +123,17 @@ export default function Settings() {
         {step === 1 && (
           <div className="space-y-8 animate-fade-in-up">
             <div className="flex items-center space-x-4">
-              <div className="p-3 bg-blue-500/10 rounded-2xl text-blue-400 border border-blue-500/20">
+              <div className="p-3 bg-indigo-500/10 rounded-2xl text-indigo-400 border border-indigo-500/20">
                 <FiKey size={24} />
               </div>
               <div>
-                <h2 className="text-2xl font-bold text-white tracking-tight">API Credentials</h2>
-                <p className="text-sm text-slate-400 font-medium mt-1">Obtain these securely from my.telegram.org</p>
-              </div>
-            </div>
-            
-            <div className="space-y-5">
-              <div>
-                <label className="block text-sm font-semibold text-slate-300 mb-2 uppercase tracking-wider">APP ID</label>
-                <input type="text" className="w-full px-5 py-4 bg-slate-900/60 border border-slate-700/50 rounded-xl text-white focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 outline-none transition-all shadow-inner font-mono text-lg" value={apiId} onChange={e => setApiId(e.target.value)} placeholder="e.g. 1234567" />
-              </div>
-              <div>
-                <label className="block text-sm font-semibold text-slate-300 mb-2 uppercase tracking-wider">API HASH</label>
-                <input type="text" className="w-full px-5 py-4 bg-slate-900/60 border border-slate-700/50 rounded-xl text-white focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 outline-none transition-all shadow-inner font-mono text-lg" value={apiHash} onChange={e => setApiHash(e.target.value)} placeholder="e.g. abc123def456..." />
+                <h2 className="text-2xl font-bold text-white tracking-tight">Step 1: Initiate Handshake</h2>
+                <p className="text-sm text-slate-400 font-medium mt-1">Uses the API credentials stored above.</p>
               </div>
             </div>
             
             <button onClick={saveCreds} disabled={loading} className="w-full py-4 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-xl font-bold tracking-wide transition-all shadow-lg hover:shadow-blue-500/25 transform hover:-translate-y-0.5 disabled:opacity-50 flex justify-center">
-              {loading ? <div className="w-6 h-6 border-2 border-white/30 border-t-white rounded-full animate-spin"></div> : 'Initialize Handshake'}
+              {loading ? <div className="w-6 h-6 border-2 border-white/30 border-t-white rounded-full animate-spin"></div> : 'Start Authentication Flow'}
             </button>
           </div>
         )}

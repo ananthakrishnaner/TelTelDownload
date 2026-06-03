@@ -7,7 +7,7 @@ services:
     ports:
       - "27017:27017"
     volumes:
-      - mongo_data:/data/db
+      - ./database:/data/db
     restart: unless-stopped
 
   backend:
@@ -21,6 +21,7 @@ services:
     volumes:
       - ./backend:/usr/src/app
       - /usr/src/app/node_modules
+      - ./media_downloads:/usr/src/app/media_downloads
     depends_on:
       - mongodb
     restart: unless-stopped
@@ -51,5 +52,4 @@ services:
       - backend
     restart: unless-stopped
 
-volumes:
-  mongo_data:
+# Removed named volume mongo_data as we are using host mapping

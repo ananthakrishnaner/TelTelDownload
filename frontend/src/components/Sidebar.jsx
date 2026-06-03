@@ -1,6 +1,5 @@
-import React from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
-import { FiHome, FiSettings, FiLogOut, FiBox } from 'react-icons/fi';
+import { FiHome, FiSettings, FiLogOut, FiBox, FiImage, FiActivity } from 'react-icons/fi';
 
 export default function Sidebar() {
   const navigate = useNavigate();
@@ -36,6 +35,22 @@ export default function Sidebar() {
         >
           <FiHome size={20} className={({isActive}) => isActive ? 'text-blue-400' : 'text-slate-500 group-hover:text-slate-300 transition-colors'} />
           <span className="text-sm md:text-base">Dashboard</span>
+        </NavLink>
+
+        <NavLink 
+          to="/media" 
+          className={({isActive}) => `group flex items-center space-x-3 px-4 py-3 md:py-3.5 rounded-2xl transition-all duration-300 whitespace-nowrap ${isActive ? 'bg-pink-500/10 text-pink-400 font-semibold shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] border border-pink-500/20' : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'}`}
+        >
+          <FiImage size={20} className={({isActive}) => isActive ? 'text-pink-400' : 'text-slate-500 group-hover:text-slate-300 transition-colors'} />
+          <span className="text-sm md:text-base">Media Vault</span>
+        </NavLink>
+
+        <NavLink 
+          to="/logs" 
+          className={({isActive}) => `group flex items-center space-x-3 px-4 py-3 md:py-3.5 rounded-2xl transition-all duration-300 whitespace-nowrap ${isActive ? 'bg-purple-500/10 text-purple-400 font-semibold shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] border border-purple-500/20' : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'}`}
+        >
+          <FiActivity size={20} className={({isActive}) => isActive ? 'text-purple-400' : 'text-slate-500 group-hover:text-slate-300 transition-colors'} />
+          <span className="text-sm md:text-base">Audit Logs</span>
         </NavLink>
 
         <NavLink 

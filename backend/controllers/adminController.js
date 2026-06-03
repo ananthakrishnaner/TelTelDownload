@@ -1,4 +1,5 @@
 const jwt = require('jsonwebtoken');
+const logActivity = require('../utils/logger');
 
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin';
@@ -8,11 +9,13 @@ exports.login = (req, res) => {
   const { username, password } = req.body;
   
   if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
-    const token = jwt.sign({ role: 'admin' }, JWT_SECRET, { expiresIn: '24h' });
-    return res.json({ success: true, token });
+    const token = jwt.sign({ role: 'admin' }, process.env.JWT_SECRET || 'fallback_secret', { expiresIn: '1d' });
+    logActivity('Admin Login Success', { username });
+    res.json({ token });
+  } else {
+    logActivity('Admin Login Failed', { username, attempt: password }, 'warning');
+    res.status(401).json({ error: 'Invalid credentials' });
   }
-  
-  return res.status(401).json({ success: false, message: 'Invalid credentials' });
 };
 
 exports.verifyToken = (req, res, next) => {

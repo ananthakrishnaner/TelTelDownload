@@ -3,6 +3,8 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Settings from './pages/Settings';
+import MediaManager from './pages/MediaManager';
+import ActivityLog from './pages/ActivityLog';
 import Sidebar from './components/Sidebar';
 
 const ProtectedRoute = ({ children }) => {
@@ -28,6 +30,18 @@ function App() {
         <Route path="/" element={
           <ProtectedRoute>
             <Dashboard />
+          </ProtectedRoute>
+        } />
+        
+        <Route path="/media" element={
+          <ProtectedRoute>
+            <MediaManager />
+          </ProtectedRoute>
+        } />
+        
+        <Route path="/logs" element={
+          <ProtectedRoute>
+            <ActivityLog />
           </ProtectedRoute>
         } />
         

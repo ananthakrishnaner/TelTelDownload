@@ -1,6 +1,7 @@
 const cron = require('node-cron');
 const ScheduledTask = require('../models/ScheduledTask');
 const telegramService = require('./telegramService');
+const logActivity = require('../utils/logger');
 
 const jobs = {};
 
@@ -8,8 +9,14 @@ async function runTask(task) {
   console.log(`Running scheduled task: ${task.name}`);
   if (task.targetChannels && task.targetChannels.length > 0) {
     for (const channelId of task.targetChannels) {
-      console.log(`Starting scheduled download for channel: ${channelId}`);
-      await telegramService.downloadMediaForGroup(channelId);
+      try {
+        await logActivity('Task Started', { taskId: task._id, channelId, name: task.name });
+        const count = await telegramService.downloadMediaForGroup(channelId);
+        await logActivity('Task Completed', { taskId: task._id, channelId, name: task.name, downloadedCount: count });
+      } catch (err) {
+        await logActivity('Task Failed', { taskId: task._id, channelId, error: err.message }, 'error');
+        console.error(`Scheduled error for ${channelId}:`, err);
+      }
     }
   }
   task.lastRunAt = new Date();
@@ -37,8 +44,16 @@ async function initializeScheduler() {
   console.log(`Initialized ${tasks.length} scheduled tasks.`);
 }
 
+const stopTask = (taskId) => {
+  if (jobs[taskId]) {
+    jobs[taskId].stop();
+    delete jobs[taskId];
+  }
+};
+
 module.exports = {
   initializeScheduler,
   scheduleJob,
+  stopTask,
   jobs
 };
