@@ -238,7 +238,7 @@ export default function Dashboard() {
                       </h3>
                       
                       {/* Overall Job Progress Bar */}
-                      {Object.values(jobProgress).filter(j => j.total && progresses[group.id]).map(j => (
+                      {Object.values(jobProgress).filter(j => j.groupId === group.id && j.total > 0).map(j => (
                         <div key={j.jobId} className="w-full mt-2 bg-slate-800 rounded-full h-1.5 overflow-hidden border border-slate-700">
                           <div className="bg-gradient-to-r from-blue-500 to-emerald-500 h-1.5 transition-all duration-300" style={{width: `${(j.progress / j.total) * 100}%`}}></div>
                           <p className="text-[10px] text-slate-500 mt-1 uppercase font-bold tracking-wider">{j.progress} / {j.total} Media Completed</p>

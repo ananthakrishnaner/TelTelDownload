@@ -153,7 +153,7 @@ async function downloadMediaForGroup(groupId, targetGroupId = null) {
       if (!targetGroupId || existing.status === 'uploaded_to_group') {
         downloadedCount++;
         activeJobs.get(jobId).progress = downloadedCount;
-        io.emit('job_progress', { jobId, progress: downloadedCount, total: validMessages.length });
+        io.emit('job_progress', { jobId, groupId, progress: downloadedCount, total: validMessages.length });
         continue;
       }
     }
@@ -210,7 +210,7 @@ async function downloadMediaForGroup(groupId, targetGroupId = null) {
       io.emit('progress', { type: 'download_complete', groupId, msgId, fileName });
       downloadedCount++;
       activeJobs.get(jobId).progress = downloadedCount;
-      io.emit('job_progress', { jobId, progress: downloadedCount, total: validMessages.length });
+      io.emit('job_progress', { jobId, groupId, progress: downloadedCount, total: validMessages.length });
 
     } catch (err) {
       console.error(`Failed media for msg ${msgId}:`, err);
@@ -294,7 +294,7 @@ async function downloadSpecificMedia(groupId, messageIds, targetGroupId = null) 
       if (!targetGroupId || existing.status === 'uploaded_to_group') {
         downloadedCount++;
         activeJobs.get(jobId).progress = downloadedCount;
-        io.emit('job_progress', { jobId, progress: downloadedCount, total: messages.length });
+        io.emit('job_progress', { jobId, groupId, progress: downloadedCount, total: messages.length });
         continue;
       }
     }
@@ -347,7 +347,7 @@ async function downloadSpecificMedia(groupId, messageIds, targetGroupId = null) 
       io.emit('progress', { type: 'download_complete', groupId, msgId, fileName });
       downloadedCount++;
       activeJobs.get(jobId).progress = downloadedCount;
-      io.emit('job_progress', { jobId, progress: downloadedCount, total: messages.length });
+      io.emit('job_progress', { jobId, groupId, progress: downloadedCount, total: messages.length });
     } catch (err) {
       console.error(`Failed specific media ${msgId}:`, err);
     }
