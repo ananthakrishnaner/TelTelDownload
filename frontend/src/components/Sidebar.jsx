@@ -46,6 +46,14 @@ export default function Sidebar() {
         </NavLink>
 
         <NavLink 
+          to="/active-jobs" 
+          className={({isActive}) => `group flex items-center space-x-3 px-4 py-3 md:py-3.5 rounded-2xl transition-all duration-300 whitespace-nowrap ${isActive ? 'bg-emerald-500/10 text-emerald-400 font-semibold shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] border border-emerald-500/20' : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'}`}
+        >
+          <FiActivity size={20} className={({isActive}) => isActive ? 'text-emerald-400' : 'text-slate-500 group-hover:text-slate-300 transition-colors'} />
+          <span className="text-sm md:text-base">Active Jobs</span>
+        </NavLink>
+
+        <NavLink 
           to="/logs" 
           className={({isActive}) => `group flex items-center space-x-3 px-4 py-3 md:py-3.5 rounded-2xl transition-all duration-300 whitespace-nowrap ${isActive ? 'bg-purple-500/10 text-purple-400 font-semibold shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] border border-purple-500/20' : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'}`}
         >

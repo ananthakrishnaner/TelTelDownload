@@ -5,8 +5,32 @@ const Media = require('../models/Media');
 const path = require('path');
 const fs = require('fs');
 const socket = require('../socket');
+const { v4: uuidv4 } = require('uuid');
 
 let client = null;
+const activeJobs = new Map();
+
+exports.getActiveJobs = () => {
+  return Array.from(activeJobs.values()).map(job => ({
+    id: job.id,
+    type: job.type,
+    groupId: job.groupId,
+    status: job.status,
+    progress: job.progress,
+    total: job.total,
+    startedAt: job.startedAt
+  }));
+};
+
+exports.stopJob = (jobId) => {
+  const job = activeJobs.get(jobId);
+  if (job) {
+    job.abortController.abort();
+    job.status = 'aborted';
+    return true;
+  }
+  return false;
+};
 
 async function getCredentials() {
   const apiIdSetting = await Setting.findOne({ key: 'apiId' });
@@ -88,21 +112,32 @@ async function getGroups() {
 async function downloadMediaForGroup(groupId, targetGroupId = null) {
   if (!client) await initClient();
   const io = socket.getIO();
+  const jobId = uuidv4();
+  const abortController = new AbortController();
   
-  // Create media directory
   const downloadDir = path.join(__dirname, '..', 'media_downloads');
   if (!fs.existsSync(downloadDir)) fs.mkdirSync(downloadDir, { recursive: true });
 
   const entity = await client.getEntity(groupId);
   const messages = await client.getMessages(entity, { limit: 100, filter: new Api.InputMessagesFilterPhotoVideo() });
+  const validMessages = messages.filter(m => m.media);
+
+  activeJobs.set(jobId, {
+    id: jobId,
+    type: 'group_pull',
+    groupId,
+    status: 'running',
+    progress: 0,
+    total: validMessages.length,
+    startedAt: Date.now(),
+    abortController
+  });
 
   let downloadedCount = 0;
-  for (const message of messages) {
-    if (!message.media) continue;
+  for (const message of validMessages) {
+    if (abortController.signal.aborted) break;
 
     const msgId = message.id;
-    
-    // Find extension
     let ext = '.bin';
     if (message.media.photo) ext = '.jpg';
     else if (message.media.document) {
@@ -113,19 +148,19 @@ async function downloadMediaForGroup(groupId, targetGroupId = null) {
     const fileName = `${groupId}_${msgId}${ext}`;
     const filePath = path.join(downloadDir, fileName);
 
-    // Robust Duplicate Check (DB and Disk)
     let existing = await Media.findOne({ telegramMessageId: msgId, channelId: groupId });
     if (existing && fs.existsSync(existing.localPath)) {
       if (!targetGroupId || existing.status === 'uploaded_to_group') {
-        continue; // Skip if completely done
+        downloadedCount++;
+        activeJobs.get(jobId).progress = downloadedCount;
+        io.emit('job_progress', { jobId, progress: downloadedCount, total: validMessages.length });
+        continue;
       }
     }
 
     try {
       if (!existing || !fs.existsSync(filePath)) {
-        // Step 1: Download Media
         io.emit('progress', { type: 'download', groupId, msgId, fileName, progress: 0 });
-        
         const buffer = await client.downloadMedia(message, {
           workers: 1,
           progressCallback: (downloaded, total) => {
@@ -133,30 +168,21 @@ async function downloadMediaForGroup(groupId, targetGroupId = null) {
             io.emit('progress', { type: 'download', groupId, msgId, fileName, progress: percentage });
           }
         });
-
         if (buffer) {
           fs.writeFileSync(filePath, buffer);
           if (!existing) {
-            existing = await Media.create({
-              telegramMessageId: msgId,
-              channelId: groupId,
-              localPath: filePath,
-              fileName,
-              caption: message.message || '',
-              status: 'downloaded'
-            });
+            existing = await Media.create({ telegramMessageId: msgId, channelId: groupId, localPath: filePath, fileName, caption: message.message || '', status: 'downloaded' });
           } else {
             existing.status = 'downloaded';
             await existing.save();
           }
-          downloadedCount++;
         }
       }
 
-      // Step 2: Auto-Upload if target group is specified
+      if (abortController.signal.aborted) break;
+
       if (targetGroupId && existing && fs.existsSync(filePath)) {
         io.emit('progress', { type: 'upload', groupId: targetGroupId, msgId, fileName, progress: 0 });
-        
         const targetEntity = await client.getEntity(targetGroupId);
         await client.sendFile(targetEntity, {
           file: filePath,
@@ -166,14 +192,26 @@ async function downloadMediaForGroup(groupId, targetGroupId = null) {
             io.emit('progress', { type: 'upload', groupId: targetGroupId, msgId, fileName, progress: percentage });
           }
         });
-
         existing.status = 'uploaded_to_group';
         existing.uploadedAt = Date.now();
         await existing.save();
         io.emit('progress', { type: 'upload_complete', groupId: targetGroupId, msgId, fileName });
+        
+        // Deletion Policy: Delete local file after successful forward
+        try {
+          fs.unlinkSync(filePath);
+          existing.status = 'deleted_locally';
+          await existing.save();
+        } catch (e) {
+          console.error('Failed to delete file after upload:', e);
+        }
       }
 
       io.emit('progress', { type: 'download_complete', groupId, msgId, fileName });
+      downloadedCount++;
+      activeJobs.get(jobId).progress = downloadedCount;
+      io.emit('job_progress', { jobId, progress: downloadedCount, total: validMessages.length });
+
     } catch (err) {
       console.error(`Failed media for msg ${msgId}:`, err);
       if (existing) {
@@ -181,6 +219,12 @@ async function downloadMediaForGroup(groupId, targetGroupId = null) {
         await existing.save();
       }
     }
+  }
+  
+  if (activeJobs.has(jobId)) {
+    const job = activeJobs.get(jobId);
+    job.status = job.status === 'aborted' ? 'aborted' : 'completed';
+    setTimeout(() => activeJobs.delete(jobId), 10000); // Keep around for 10s so frontend sees completion
   }
   return downloadedCount;
 }
@@ -210,16 +254,28 @@ async function getRecentMedia(groupId) {
 async function downloadSpecificMedia(groupId, messageIds, targetGroupId = null) {
   if (!client) await initClient();
   const io = socket.getIO();
+  const jobId = uuidv4();
+  const abortController = new AbortController();
   const downloadDir = path.join(__dirname, '..', 'media_downloads');
   if (!fs.existsSync(downloadDir)) fs.mkdirSync(downloadDir, { recursive: true });
 
   const entity = await client.getEntity(groupId);
-  // We have to get messages one by one or get a batch if API supports it
-  // GramJS client.getMessages supports an array of ids!
   const messages = await client.getMessages(entity, { ids: messageIds });
+
+  activeJobs.set(jobId, {
+    id: jobId,
+    type: 'specific_pull',
+    groupId,
+    status: 'running',
+    progress: 0,
+    total: messages.length,
+    startedAt: Date.now(),
+    abortController
+  });
 
   let downloadedCount = 0;
   for (const message of messages) {
+    if (abortController.signal.aborted) break;
     if (!message || !message.media) continue;
 
     const msgId = message.id;
@@ -235,7 +291,12 @@ async function downloadSpecificMedia(groupId, messageIds, targetGroupId = null) 
 
     let existing = await Media.findOne({ telegramMessageId: msgId, channelId: groupId });
     if (existing && fs.existsSync(existing.localPath)) {
-      if (!targetGroupId || existing.status === 'uploaded_to_group') continue;
+      if (!targetGroupId || existing.status === 'uploaded_to_group') {
+        downloadedCount++;
+        activeJobs.get(jobId).progress = downloadedCount;
+        io.emit('job_progress', { jobId, progress: downloadedCount, total: messages.length });
+        continue;
+      }
     }
 
     try {
@@ -256,9 +317,10 @@ async function downloadSpecificMedia(groupId, messageIds, targetGroupId = null) 
             existing.status = 'downloaded';
             await existing.save();
           }
-          downloadedCount++;
         }
       }
+
+      if (abortController.signal.aborted) break;
 
       if (targetGroupId && existing && fs.existsSync(filePath)) {
         io.emit('progress', { type: 'upload', groupId: targetGroupId, msgId, fileName, progress: 0 });
@@ -275,11 +337,26 @@ async function downloadSpecificMedia(groupId, messageIds, targetGroupId = null) 
         existing.uploadedAt = Date.now();
         await existing.save();
         io.emit('progress', { type: 'upload_complete', groupId: targetGroupId, msgId, fileName });
+        
+        try {
+          fs.unlinkSync(filePath);
+          existing.status = 'deleted_locally';
+          await existing.save();
+        } catch (e) { console.error('Failed to delete file after upload:', e); }
       }
       io.emit('progress', { type: 'download_complete', groupId, msgId, fileName });
+      downloadedCount++;
+      activeJobs.get(jobId).progress = downloadedCount;
+      io.emit('job_progress', { jobId, progress: downloadedCount, total: messages.length });
     } catch (err) {
       console.error(`Failed specific media ${msgId}:`, err);
     }
+  }
+  
+  if (activeJobs.has(jobId)) {
+    const job = activeJobs.get(jobId);
+    job.status = job.status === 'aborted' ? 'aborted' : 'completed';
+    setTimeout(() => activeJobs.delete(jobId), 10000);
   }
   return downloadedCount;
 }
@@ -305,6 +382,13 @@ async function forwardLocalMedia(mediaId, targetGroupId) {
   media.uploadedAt = Date.now();
   await media.save();
   io.emit('progress', { type: 'upload_complete', groupId: targetGroupId, msgId: media.telegramMessageId, fileName: media.fileName });
+  
+  try {
+    fs.unlinkSync(media.localPath);
+    media.status = 'deleted_locally';
+    await media.save();
+  } catch (e) { console.error('Failed to delete file after forward:', e); }
+
   return true;
 }
 

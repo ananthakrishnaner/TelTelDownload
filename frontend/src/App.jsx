@@ -5,6 +5,7 @@ import Dashboard from './pages/Dashboard';
 import Settings from './pages/Settings';
 import MediaManager from './pages/MediaManager';
 import ActivityLog from './pages/ActivityLog';
+import ActiveJobs from './pages/ActiveJobs';
 import Sidebar from './components/Sidebar';
 
 const ProtectedRoute = ({ children }) => {

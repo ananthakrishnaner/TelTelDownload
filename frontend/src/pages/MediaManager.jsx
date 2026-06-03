@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import api from '../services/api';
-import { FiImage, FiVideo, FiTrash2, FiRefreshCcw, FiExternalLink, FiSend, FiX } from 'react-icons/fi';
+import { FiImage, FiVideo, FiTrash2, FiRefreshCcw, FiExternalLink, FiSend, FiX, FiCheck } from 'react-icons/fi';
 
 export default function MediaManager() {
   const [media, setMedia] = useState([]);
+  const [selectedMediaIds, setSelectedMediaIds] = useState([]);
   const [groups, setGroups] = useState([]);
   const [loading, setLoading] = useState(true);
   const [forwardModal, setForwardModal] = useState({ show: false, mediaId: null, targetGroupId: '' });
@@ -52,19 +53,37 @@ export default function MediaManager() {
     }
   };
 
-  const openForwardModal = (id) => {
+  const openForwardModal = (id = null) => {
     setForwardModal({ show: true, mediaId: id, targetGroupId: groups[0]?.id || '' });
   };
 
   const confirmForward = async () => {
     if (!forwardModal.targetGroupId) return;
     try {
-      await api.post(`/media/${forwardModal.mediaId}/forward`, { targetGroupId: forwardModal.targetGroupId });
+      if (forwardModal.mediaId) {
+        // Single forward
+        await api.post(`/media/${forwardModal.mediaId}/forward`, { targetGroupId: forwardModal.targetGroupId });
+      } else {
+        // Bulk forward
+        for (const id of selectedMediaIds) {
+          await api.post(`/media/${id}/forward`, { targetGroupId: forwardModal.targetGroupId });
+        }
+      }
       alert('Forwarding initiated!');
       setForwardModal({ show: false, mediaId: null, targetGroupId: '' });
+      setSelectedMediaIds([]);
     } catch (err) {
       alert('Failed: ' + err.message);
     }
+  };
+
+  const toggleSelection = (id) => {
+    setSelectedMediaIds(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
+  };
+
+  const selectAll = () => {
+    if (selectedMediaIds.length === media.length) setSelectedMediaIds([]);
+    else setSelectedMediaIds(media.map(m => m._id));
   };
 
   return (
@@ -75,18 +94,42 @@ export default function MediaManager() {
             <FiImage size={28} />
           </div>
           <div>
-            <h1 className="text-3xl md:text-5xl font-black text-transparent bg-clip-text bg-gradient-to-br from-white to-slate-400 tracking-tight">Media Vault</h1>
+            <h1 className="text-3xl md:text-5xl font-black text-transparent bg-clip-text bg-gradient-to-br from-white to-slate-400 tracking-tight flex items-center gap-4">
+              Media Vault
+            </h1>
             <p className="text-slate-400 font-medium mt-1">Manage and preview downloaded media.</p>
           </div>
         </div>
+        
+        {media.length > 0 && (
+          <div className="flex items-center space-x-4">
+            <button onClick={selectAll} className="px-4 py-2 bg-slate-800 text-white rounded-xl hover:bg-slate-700 transition-colors">
+              {selectedMediaIds.length === media.length ? 'Deselect All' : 'Select All'}
+            </button>
+            {selectedMediaIds.length > 0 && (
+              <button onClick={() => openForwardModal()} className="flex items-center space-x-2 px-4 py-2 bg-purple-600 text-white rounded-xl hover:bg-purple-500 transition-colors shadow-lg shadow-purple-500/20">
+                <FiSend /> <span>Bulk Forward ({selectedMediaIds.length})</span>
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {media.map((item) => (
-          <div key={item._id} className="glass-panel rounded-[1.5rem] overflow-hidden border border-slate-700/50 shadow-lg group hover:border-slate-500 transition-colors">
+          <div 
+            key={item._id} 
+            onClick={() => toggleSelection(item._id)}
+            className={`glass-panel rounded-[1.5rem] overflow-hidden border-2 shadow-lg group hover:border-slate-500 transition-all cursor-pointer relative ${selectedMediaIds.includes(item._id) ? 'border-blue-500 shadow-[0_0_15px_rgba(59,130,246,0.2)]' : 'border-slate-700/50'}`}
+          >
+            {selectedMediaIds.includes(item._id) && (
+              <div className="absolute top-3 left-3 z-10 w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center text-white shadow-lg"><FiCheck size={14} /></div>
+            )}
             <div className="h-48 bg-slate-900/80 relative flex items-center justify-center overflow-hidden">
-              {item.fileName?.endsWith('.jpg') ? (
+              {item.fileName?.endsWith('.jpg') || item.fileName?.endsWith('.png') ? (
                 <img src={`/media/${item.fileName}`} alt="media" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
+              ) : item.fileName?.endsWith('.mp4') ? (
+                <video src={`/media/${item.fileName}`} muted loop playsInline onMouseOver={e => e.target.play()} onMouseOut={e => e.target.pause()} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
               ) : (
                 <div className="flex flex-col items-center justify-center text-slate-500">
                   <FiVideo size={48} className="mb-2" />
@@ -99,7 +142,7 @@ export default function MediaManager() {
                 </span>
               </div>
             </div>
-            <div className="p-5">
+            <div className="p-5" onClick={e => e.stopPropagation()}>
               <p className="text-slate-300 text-sm truncate mb-4">{item.caption || 'No caption'}</p>
               <div className="flex justify-between items-center mt-4">
                 <a href={`/media/${item.fileName}`} target="_blank" rel="noreferrer" className="p-2 text-slate-400 hover:text-blue-400 hover:bg-blue-500/10 rounded-lg transition-colors">

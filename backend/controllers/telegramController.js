@@ -66,11 +66,30 @@ exports.downloadSpecific = async (req, res) => {
   }
 };
 
+exports.getActiveJobs = (req, res) => {
+  try {
+    const jobs = telegramService.getActiveJobs();
+    res.json({ jobs });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.stopJob = (req, res) => {
+  try {
+    const success = telegramService.stopJob(req.params.id);
+    if (success) res.json({ success: true, message: 'Job stopped' });
+    else res.status(404).json({ error: 'Job not found or already completed' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
 exports.triggerDownload = async (req, res) => {
   try {
-    const { groupId } = req.body;
+    const { groupId, targetGroupId } = req.body;
     // We run it asynchronously so it doesn't block the request
-    telegramService.downloadMediaForGroup(groupId).then(count => {
+    telegramService.downloadMediaForGroup(groupId, targetGroupId).then(count => {
       console.log(`Finished manual download for ${groupId}. Downloaded: ${count}`);
     }).catch(console.error);
     

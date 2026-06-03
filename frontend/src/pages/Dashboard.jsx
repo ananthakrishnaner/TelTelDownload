@@ -12,6 +12,7 @@ export default function Dashboard() {
   const [search, setSearch] = useState('');
   
   const [progresses, setProgresses] = useState({});
+  const [jobProgress, setJobProgress] = useState({});
   const socketRef = useRef(null);
 
   // Modals state
@@ -49,6 +50,8 @@ export default function Dashboard() {
           fetchData(); // Refresh stats
         }, 3000);
       }
+    socketRef.current.on('job_progress', (data) => {
+      setJobProgress(prev => ({ ...prev, [data.jobId]: data }));
     });
     return () => socketRef.current.disconnect();
   }, []);
@@ -222,15 +225,24 @@ export default function Dashboard() {
                     <div className="absolute bottom-0 left-0 h-1 bg-gradient-to-r from-blue-500 to-purple-500 transition-all duration-300" style={{width: `${progresses[group.id].progress}%`}}></div>
                   )}
 
-                  <div className="flex items-center space-x-4 mb-4 sm:mb-0">
+                  <div className="flex flex-col sm:flex-row items-center space-x-4 mb-4 sm:mb-0 w-full sm:w-1/2">
                     <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-slate-700 to-slate-800 flex items-center justify-center text-xl font-bold text-white border border-slate-600/50 shadow-inner group-hover:border-blue-500/30 transition-colors shrink-0">
                       <span>{group.title.charAt(0)}</span>
                     </div>
-                    <div className="min-w-0 flex-1">
+                    <div className="min-w-0 flex-1 w-full">
                       <h3 className="text-white font-semibold text-lg truncate pr-4 group-hover:text-blue-200 transition-colors">
                         {group.title}
                         {progresses[group.id] && <span className="ml-2 text-xs text-blue-400 animate-pulse">{progresses[group.id].type === 'upload' ? 'Uploading...' : 'Downloading...'} {progresses[group.id].progress}%</span>}
                       </h3>
+                      
+                      {/* Overall Job Progress Bar */}
+                      {Object.values(jobProgress).filter(j => j.total && progresses[group.id]).map(j => (
+                        <div key={j.jobId} className="w-full mt-2 bg-slate-800 rounded-full h-1.5 overflow-hidden border border-slate-700">
+                          <div className="bg-gradient-to-r from-blue-500 to-emerald-500 h-1.5 transition-all duration-300" style={{width: `${(j.progress / j.total) * 100}%`}}></div>
+                          <p className="text-[10px] text-slate-500 mt-1 uppercase font-bold tracking-wider">{j.progress} / {j.total} Media Completed</p>
+                        </div>
+                      ))}
+
                       <div className="flex items-center mt-1 space-x-2 text-xs font-medium">
                         <span className="px-2 py-0.5 rounded-md bg-slate-800 text-slate-400 border border-slate-700">{group.isChannel ? 'Channel' : 'Group'}</span>
                         <span className="text-slate-500 font-mono">ID: {group.id}</span>
