@@ -50,6 +50,8 @@ export default function Dashboard() {
           fetchData(); // Refresh stats
         }, 3000);
       }
+    });
+    
     socketRef.current.on('job_progress', (data) => {
       setJobProgress(prev => ({ ...prev, [data.jobId]: data }));
     });
