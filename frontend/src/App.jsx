@@ -46,6 +46,12 @@ function App() {
           </ProtectedRoute>
         } />
         
+        <Route path="/active-jobs" element={
+          <ProtectedRoute>
+            <ActiveJobs />
+          </ProtectedRoute>
+        } />
+        
         <Route path="/settings" element={
           <ProtectedRoute>
             <Settings />
