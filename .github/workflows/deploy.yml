@@ -22,4 +22,6 @@ jobs:
           script: |
             cd TelTelDownload
             git pull origin main
+            echo "ADMIN_USERNAME=${{ secrets.ADMIN_USERNAME }}" > .env
+            echo "ADMIN_PASSWORD=${{ secrets.ADMIN_PASSWORD }}" >> .env
             docker-compose up -d --build

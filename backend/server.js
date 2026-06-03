@@ -23,7 +23,7 @@ mongoose.connect(MONGO_URI)
   .catch(err => console.error('MongoDB Connection Error:', err));
 
 // Routes
-// app.use('/api/admin', require('./routes/adminRoutes'));
+app.use('/api/admin', require('./routes/adminRoutes'));
 app.use('/api/telegram', require('./routes/telegramRoutes'));
 app.use('/api/scheduler', require('./routes/schedulerRoutes'));
 
