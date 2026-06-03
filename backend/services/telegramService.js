@@ -220,12 +220,92 @@ async function downloadSpecificMedia(groupId, messageIds, targetGroupId = null) 
 
   let downloadedCount = 0;
   for (const message of messages) {
-    // ... we can just reuse the inner logic of downloadMediaForGroup.
-    // For simplicity of this massive patch, we'll implement a condensed version.
     if (!message || !message.media) continue;
-    // ...
+
+    const msgId = message.id;
+    let ext = '.bin';
+    if (message.media.photo) ext = '.jpg';
+    else if (message.media.document) {
+      const attr = message.media.document.attributes.find(a => a.className === 'DocumentAttributeFilename');
+      if (attr) ext = path.extname(attr.fileName) || '.mp4';
+      else ext = '.mp4';
+    }
+    const fileName = `${groupId}_${msgId}${ext}`;
+    const filePath = path.join(downloadDir, fileName);
+
+    let existing = await Media.findOne({ telegramMessageId: msgId, channelId: groupId });
+    if (existing && fs.existsSync(existing.localPath)) {
+      if (!targetGroupId || existing.status === 'uploaded_to_group') continue;
+    }
+
+    try {
+      if (!existing || !fs.existsSync(filePath)) {
+        io.emit('progress', { type: 'download', groupId, msgId, fileName, progress: 0 });
+        const buffer = await client.downloadMedia(message, {
+          workers: 1,
+          progressCallback: (downloaded, total) => {
+            const percentage = Math.round((Number(downloaded) / Number(total)) * 100);
+            io.emit('progress', { type: 'download', groupId, msgId, fileName, progress: percentage });
+          }
+        });
+        if (buffer) {
+          fs.writeFileSync(filePath, buffer);
+          if (!existing) {
+            existing = await Media.create({ telegramMessageId: msgId, channelId: groupId, localPath: filePath, fileName, caption: message.message || '', status: 'downloaded' });
+          } else {
+            existing.status = 'downloaded';
+            await existing.save();
+          }
+          downloadedCount++;
+        }
+      }
+
+      if (targetGroupId && existing && fs.existsSync(filePath)) {
+        io.emit('progress', { type: 'upload', groupId: targetGroupId, msgId, fileName, progress: 0 });
+        const targetEntity = await client.getEntity(targetGroupId);
+        await client.sendFile(targetEntity, {
+          file: filePath,
+          caption: existing.caption || '',
+          progressCallback: (uploaded, total) => {
+            const percentage = Math.round((Number(uploaded) / Number(total)) * 100);
+            io.emit('progress', { type: 'upload', groupId: targetGroupId, msgId, fileName, progress: percentage });
+          }
+        });
+        existing.status = 'uploaded_to_group';
+        existing.uploadedAt = Date.now();
+        await existing.save();
+        io.emit('progress', { type: 'upload_complete', groupId: targetGroupId, msgId, fileName });
+      }
+      io.emit('progress', { type: 'download_complete', groupId, msgId, fileName });
+    } catch (err) {
+      console.error(`Failed specific media ${msgId}:`, err);
+    }
   }
   return downloadedCount;
+}
+
+async function forwardLocalMedia(mediaId, targetGroupId) {
+  if (!client) await initClient();
+  const io = socket.getIO();
+  const media = await Media.findById(mediaId);
+  if (!media || !fs.existsSync(media.localPath)) throw new Error('File not found locally');
+
+  io.emit('progress', { type: 'upload', groupId: targetGroupId, msgId: media.telegramMessageId, fileName: media.fileName, progress: 0 });
+  const targetEntity = await client.getEntity(targetGroupId);
+  await client.sendFile(targetEntity, {
+    file: media.localPath,
+    caption: media.caption || '',
+    progressCallback: (uploaded, total) => {
+      const percentage = Math.round((Number(uploaded) / Number(total)) * 100);
+      io.emit('progress', { type: 'upload', groupId: targetGroupId, msgId: media.telegramMessageId, fileName: media.fileName, progress: percentage });
+    }
+  });
+
+  media.status = 'uploaded_to_group';
+  media.uploadedAt = Date.now();
+  await media.save();
+  io.emit('progress', { type: 'upload_complete', groupId: targetGroupId, msgId: media.telegramMessageId, fileName: media.fileName });
+  return true;
 }
 
 module.exports = {
@@ -235,5 +315,6 @@ module.exports = {
   getGroups,
   downloadMediaForGroup,
   getRecentMedia,
-  downloadSpecificMedia
+  downloadSpecificMedia,
+  forwardLocalMedia
 };

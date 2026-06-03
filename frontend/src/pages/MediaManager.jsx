@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import api from '../services/api';
-import { FiImage, FiVideo, FiTrash2, FiRefreshCcw, FiExternalLink } from 'react-icons/fi';
+import { FiImage, FiVideo, FiTrash2, FiRefreshCcw, FiExternalLink, FiSend } from 'react-icons/fi';
 
 export default function MediaManager() {
   const [media, setMedia] = useState([]);
@@ -40,6 +40,17 @@ export default function MediaManager() {
     }
   };
 
+  const handleForward = async (id) => {
+    const target = prompt('Enter Destination Group ID to forward this media to:');
+    if (!target) return;
+    try {
+      await api.post(`/media/${id}/forward`, { targetGroupId: target });
+      alert('Forwarding initiated!');
+    } catch (err) {
+      alert('Failed: ' + err.message);
+    }
+  };
+
   return (
     <div className="p-4 md:p-10 max-w-7xl mx-auto space-y-8 animate-fade-in pb-20">
       <div className="flex items-center justify-between mb-8">
@@ -74,17 +85,20 @@ export default function MediaManager() {
             </div>
             <div className="p-5">
               <p className="text-slate-300 text-sm truncate mb-4">{item.caption || 'No caption'}</p>
-              <div className="flex justify-between items-center">
+              <div className="flex justify-between items-center mt-4">
                 <a href={`/media/${item.fileName}`} target="_blank" rel="noreferrer" className="p-2 text-slate-400 hover:text-blue-400 hover:bg-blue-500/10 rounded-lg transition-colors">
                   <FiExternalLink size={20} />
                 </a>
                 <div className="flex space-x-2">
+                  <button onClick={() => handleForward(item._id)} className="p-2 text-slate-400 hover:text-purple-400 hover:bg-purple-500/10 rounded-lg transition-colors" title="Forward to Group">
+                    <FiSend size={20} />
+                  </button>
                   {item.status === 'failed' && (
-                    <button onClick={() => handleRetry(item._id)} className="p-2 text-slate-400 hover:text-orange-400 hover:bg-orange-500/10 rounded-lg transition-colors">
+                    <button onClick={() => handleRetry(item._id)} className="p-2 text-slate-400 hover:text-orange-400 hover:bg-orange-500/10 rounded-lg transition-colors" title="Retry Download">
                       <FiRefreshCcw size={20} />
                     </button>
                   )}
-                  <button onClick={() => handleDelete(item._id)} className="p-2 text-slate-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors">
+                  <button onClick={() => handleDelete(item._id)} className="p-2 text-slate-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors" title="Delete">
                     <FiTrash2 size={20} />
                   </button>
                 </div>

@@ -47,10 +47,21 @@ exports.retryMedia = async (req, res) => {
     // telegramService to just download that specific message.
     media.status = 'downloaded';
     await media.save();
-    
-    // In a fully robust system, we would trigger `client.downloadMedia` for just this message here.
-    // For now, resetting the status allows the next group sync to pick it up and try again.
     res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.forwardMedia = async (req, res) => {
+  try {
+    const { targetGroupId } = req.body;
+    const telegramService = require('../services/telegramService');
+    telegramService.forwardLocalMedia(req.params.id, targetGroupId)
+      .then(() => console.log('Forwarded media ' + req.params.id))
+      .catch(err => console.error(err));
+      
+    res.json({ success: true, message: 'Forwarding initiated' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
