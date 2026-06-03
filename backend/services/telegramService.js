@@ -232,7 +232,7 @@ async function downloadMediaForGroup(groupId, targetGroupId = null) {
 async function getRecentMedia(groupId) {
   if (!client) await initClient();
   const entity = await client.getEntity(groupId);
-  const messages = await client.getMessages(entity, { limit: 50, filter: new Api.InputMessagesFilterPhotoVideo() });
+  const messages = await client.getMessages(entity, { limit: 1000, filter: new Api.InputMessagesFilterPhotoVideo() });
   
   return messages.filter(m => m.media).map(m => {
     let ext = '.bin';
