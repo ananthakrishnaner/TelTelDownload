@@ -44,6 +44,21 @@ export default function MediaManager() {
     }
   };
 
+  const bulkDelete = async () => {
+    if (selectedMediaIds.length === 0) return;
+    if (!confirm(`Are you sure you want to delete ${selectedMediaIds.length} media items?`)) return;
+
+    try {
+      setLoading(true);
+      await api.post('/media/bulk-delete', { mediaIds: selectedMediaIds });
+      setSelectedMediaIds([]);
+      fetchMedia();
+    } catch (err) {
+      alert('Error: ' + err.message);
+      setLoading(false);
+    }
+  };
+
   const handleRetry = async (id) => {
     try {
       await api.post(`/media/${id}/retry`);
@@ -108,9 +123,20 @@ export default function MediaManager() {
               {selectedMediaIds.length === media.length ? 'Deselect All' : 'Select All'}
             </button>
             {selectedMediaIds.length > 0 && (
-              <button onClick={() => openForwardModal()} className="flex items-center space-x-2 px-4 py-2 bg-purple-600 text-white rounded-xl hover:bg-purple-500 transition-colors shadow-lg shadow-purple-500/20">
-                <FiSend /> <span>Bulk Forward ({selectedMediaIds.length})</span>
-              </button>
+              <div className="flex space-x-3">
+                <button 
+                  onClick={bulkDelete}
+                  className="px-4 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 rounded-xl font-medium transition-colors"
+                >
+                  Delete Selected ({selectedMediaIds.length})
+                </button>
+                <button 
+                  onClick={() => openForwardModal()}
+                  className="px-4 py-2 bg-purple-600 text-white rounded-xl hover:bg-purple-500 transition-colors shadow-lg shadow-purple-500/20"
+                >
+                  <FiSend /> <span>Bulk Forward ({selectedMediaIds.length})</span>
+                </button>
+              </div>
             )}
           </div>
         )}

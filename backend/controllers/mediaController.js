@@ -3,7 +3,7 @@ const fs = require('fs');
 
 exports.getMedia = async (req, res) => {
   try {
-    const { status, channelId, page = 1, limit = 50 } = req.query;
+    const { status, channelId, page = 1, limit = 1000 } = req.query;
     const query = {};
     if (status) query.status = status;
     if (channelId) query.channelId = channelId;
@@ -32,6 +32,29 @@ exports.deleteMedia = async (req, res) => {
     
     await Media.findByIdAndDelete(req.params.id);
     res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.bulkDeleteMedia = async (req, res) => {
+  try {
+    const { mediaIds } = req.body;
+    if (!mediaIds || !Array.isArray(mediaIds)) {
+      return res.status(400).json({ error: 'Invalid mediaIds array' });
+    }
+
+    for (const id of mediaIds) {
+      const media = await Media.findById(id);
+      if (media) {
+        if (fs.existsSync(media.localPath)) {
+          try { fs.unlinkSync(media.localPath); } catch (e) {}
+        }
+        await Media.findByIdAndDelete(id);
+      }
+    }
+
+    res.json({ success: true, message: `Deleted ${mediaIds.length} items` });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

@@ -469,5 +469,7 @@ module.exports = {
   getRecentMedia,
   downloadSpecificMedia,
   forwardLocalMedia,
-  bulkForwardLocalMedia
+  bulkForwardLocalMedia,
+  getActiveJobs,
+  stopJob
 };

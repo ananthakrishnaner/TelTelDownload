@@ -22,8 +22,8 @@ export default function Settings() {
   const fetchConfig = async () => {
     try {
       const res = await api.get('/system/settings');
-      if (res.data.apiId) setApiId(res.data.apiId);
-      if (res.data.apiHash) setApiHash(res.data.apiHash);
+      if (res.data.apiId) setApiId(res.data.apiId.toString());
+      if (res.data.apiHash) setApiHash(res.data.apiHash.toString());
     } catch (err) {
       console.error(err);
     } finally {

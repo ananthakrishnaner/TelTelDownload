@@ -193,6 +193,26 @@ export default function Dashboard() {
         </button>
       </div>
 
+      {/* Analytics Row */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 md:gap-6">
+        <div className="bg-slate-800/40 border border-slate-700/50 rounded-2xl p-6 shadow-xl flex flex-col items-center text-center hover:bg-slate-800/60 transition-colors">
+          <h4 className="text-slate-400 text-sm font-semibold uppercase tracking-wider mb-2">Total Monitored Groups</h4>
+          <span className="text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-indigo-400">{groups.length}</span>
+        </div>
+        <div className="bg-slate-800/40 border border-slate-700/50 rounded-2xl p-6 shadow-xl flex flex-col items-center text-center hover:bg-slate-800/60 transition-colors">
+          <h4 className="text-slate-400 text-sm font-semibold uppercase tracking-wider mb-2">Total Media Indexed</h4>
+          <span className="text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-teal-400">{Object.values(mediaStats).reduce((a, b) => a + b, 0)}</span>
+        </div>
+        <div className="bg-slate-800/40 border border-slate-700/50 rounded-2xl p-6 shadow-xl flex flex-col items-center text-center hover:bg-slate-800/60 transition-colors">
+          <h4 className="text-slate-400 text-sm font-semibold uppercase tracking-wider mb-2">Scheduled Tasks</h4>
+          <span className="text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-pink-400">{tasks.length}</span>
+        </div>
+        <div className="bg-slate-800/40 border border-slate-700/50 rounded-2xl p-6 shadow-xl flex flex-col items-center text-center hover:bg-slate-800/60 transition-colors">
+          <h4 className="text-slate-400 text-sm font-semibold uppercase tracking-wider mb-2">Active Jobs Running</h4>
+          <span className="text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-amber-400 to-orange-400">{Object.keys(jobProgress).length}</span>
+        </div>
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         
         {/* Groups List */}
