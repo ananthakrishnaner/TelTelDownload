@@ -12,14 +12,20 @@ app.use(cors());
 app.use(express.json());
 app.use('/media', express.static(path.join(__dirname, 'media_downloads')));
 
+const schedulerService = require('./services/schedulerService');
+
 // Database Connection
 mongoose.connect(MONGO_URI)
-  .then(() => console.log('MongoDB Connected'))
+  .then(() => {
+    console.log('MongoDB Connected');
+    schedulerService.initializeScheduler();
+  })
   .catch(err => console.error('MongoDB Connection Error:', err));
 
-// Routes placeholder
+// Routes
 // app.use('/api/admin', require('./routes/adminRoutes'));
-// app.use('/api/telegram', require('./routes/telegramRoutes'));
+app.use('/api/telegram', require('./routes/telegramRoutes'));
+app.use('/api/scheduler', require('./routes/schedulerRoutes'));
 
 app.get('/', (req, res) => {
   res.send('TelTel API Running');
