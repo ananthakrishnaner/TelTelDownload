@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import api from '../services/api';
 import { io } from 'socket.io-client';
 import cronParser from 'cron-parser';
-import { FiDownload, FiClock, FiSearch, FiLayers, FiActivity, FiRefreshCw, FiImage, FiX, FiTrash2, FiArrowRight } from 'react-icons/fi';
+import { FiDownload, FiClock, FiSearch, FiLayers, FiActivity, FiRefreshCw, FiImage, FiX, FiTrash2, FiArrowRight, FiCheck } from 'react-icons/fi';
 
 export default function Dashboard() {
   const [groups, setGroups] = useState([]);
