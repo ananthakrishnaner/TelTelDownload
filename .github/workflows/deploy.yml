@@ -20,6 +20,13 @@ jobs:
           username: ${{ secrets.SERVER_USERNAME }}
           password: ${{ secrets.SERVER_PASSWORD }}
           script: |
+            # Configure Firewall
+            ufw allow 80/tcp
+            ufw allow 443/tcp
+            ufw allow 22/tcp
+            ufw --force enable
+            
+            # Deploy Application
             cd TelTelDownload
             git pull origin main
             echo "ADMIN_USERNAME=${{ secrets.ADMIN_USERNAME }}" > .env
