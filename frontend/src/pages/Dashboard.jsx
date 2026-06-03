@@ -21,7 +21,7 @@ export default function Dashboard() {
   const [selectedGroup, setSelectedGroup] = useState(null);
   
   // Schedule Form
-  const [cronExp, setCronExp] = useState('0 * * * *');
+  const [scheduleTime, setScheduleTime] = useState('');
   const [targetGroup, setTargetGroup] = useState('');
   
   // Manual Pull Form
@@ -99,12 +99,23 @@ export default function Dashboard() {
 
   const submitSchedule = async () => {
     try {
+      let finalCron = '0 * * * *'; // default hourly
+      if (scheduleTime) {
+        // scheduleTime format: YYYY-MM-DDThh:mm
+        const dateObj = new Date(scheduleTime);
+        const min = dateObj.getMinutes();
+        const hr = dateObj.getHours();
+        const dom = dateObj.getDate();
+        const mon = dateObj.getMonth() + 1;
+        // Run exactly at this month, day, hour, and minute
+        finalCron = `${min} ${hr} ${dom} ${mon} *`;
+      }
+
       await api.post('/scheduler', {
         name: `Auto-Sync ${selectedGroup.title}`,
-        cronExpression: cronExp,
+        cronExpression: finalCron,
         targetChannels: [selectedGroup.id],
         isActive: true
-        // Note: Future backend update could store targetGroupId in the task too!
       });
       setShowScheduleModal(false);
       fetchData();
@@ -330,8 +341,14 @@ export default function Dashboard() {
             <p className="text-slate-400 text-sm mb-6">Set up automated downloads for {selectedGroup?.title}.</p>
             <div className="space-y-4 mb-6">
               <div>
-                <label className="block text-xs font-bold text-slate-400 mb-2 uppercase tracking-wide">Cron Expression</label>
-                <input type="text" value={cronExp} onChange={e => setCronExp(e.target.value)} className="w-full bg-slate-800 border border-slate-600 rounded-xl p-3 text-white font-mono focus:ring-2 focus:ring-purple-500" />
+                <label className="block text-xs font-bold text-slate-400 mb-2 uppercase tracking-wide">Select Date and Time</label>
+                <input 
+                  type="datetime-local" 
+                  value={scheduleTime} 
+                  onChange={e => setScheduleTime(e.target.value)} 
+                  className="w-full bg-slate-800 border border-slate-600 rounded-xl p-3 text-white focus:ring-2 focus:ring-purple-500" 
+                />
+                <p className="text-[10px] text-slate-500 mt-2">The task will trigger at this exact date and time.</p>
               </div>
             </div>
             <div className="flex space-x-3">

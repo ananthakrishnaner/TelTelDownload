@@ -39,8 +39,24 @@ jobs:
             docker-compose up -d --build
             
             # Print status to the deployment log
-            echo "--- Container Status ---"
+            echo "--- Verifying Container Status ---"
             docker ps
-            echo "--- Backend Logs (Waiting for MongoDB) ---"
-            sleep 5
-            docker logs --tail 20 teltel_backend
+            
+            echo "--- Waiting for Containers to Initialize (15s) ---"
+            sleep 15
+            
+            echo "--- Nginx Logs ---"
+            docker logs --tail 30 teltel_nginx
+            
+            echo "--- Backend Initialization Logs ---"
+            docker logs --tail 50 teltel_backend
+            
+            echo "--- Frontend Initialization Logs ---"
+            docker logs --tail 30 teltel_frontend
+            
+            # Check if backend crashed
+            BACKEND_STATUS=$(docker inspect -f '{{.State.Status}}' teltel_backend)
+            if [ "$BACKEND_STATUS" != "running" ]; then
+              echo "CRITICAL ERROR: Backend container crashed or failed to start!"
+              exit 1
+            fi
