@@ -6,57 +6,256 @@ on:
       - main
   workflow_dispatch:
 
+# Required for ghcr.io push from the `build` job.
+permissions:
+  contents: read
+  packages: write
+
+# Shared config — image registry, names, app dir on the server.
+env:
+  REGISTRY: ghcr.io
+  IMAGE_OWNER: ${{ github.repository_owner }}        # ananthakrishnaner
+  BACKEND_IMAGE: teltel-backend
+  FRONTEND_IMAGE: teltel-frontend
+  REMOTE_DIR: TelTelDownload
+  # Resolved per-job: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/<name>:<tag>
+
 jobs:
-  deploy:
+  # ---------------------------------------------------------------
+  # 1) build — compile, lint, and push versioned images to ghcr.io
+  # ---------------------------------------------------------------
+  build:
+    name: Build & Push Images
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      backend_tag: ${{ steps.meta-backend.outputs.version }}
+      frontend_tag: ${{ steps.meta-frontend.outputs.version }}
+      backend_image: ${{ steps.meta-backend.outputs.name }}:${{ steps.meta-backend.outputs.version }}
+      frontend_image: ${{ steps.meta-frontend.outputs.name }}:${{ steps.meta-frontend.outputs.version }}
+      short_sha: ${{ steps.short-sha.outputs.sha }}
+      trigger: ${{ steps.trigger.outputs.name }}
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v4
 
+      - name: Resolve short SHA
+        id: short-sha
+        run: echo "sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve trigger
+        id: trigger
+        run: echo "name=$([ \"${{ github.event_name }}\" = 'workflow_dispatch' ] && echo 'manual (workflow_dispatch)' || echo 'push to main')" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute backend metadata
+        id: meta-backend
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ env.BACKEND_IMAGE }}
+          tags: |
+            type=sha,prefix=
+            type=raw,value=latest
+          flavor: latest=auto
+
+      - name: Compute frontend metadata
+        id: meta-frontend
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ env.FRONTEND_IMAGE }}
+          tags: |
+            type=sha,prefix=
+            type=raw,value=latest
+          flavor: latest=auto
+
+      - name: Build & push backend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          push: true
+          tags: ${{ steps.meta-backend.outputs.tags }}
+          labels: ${{ steps.meta-backend.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build & push frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          push: true
+          tags: ${{ steps.meta-frontend.outputs.tags }}
+          labels: ${{ steps.meta-frontend.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Belt-and-braces: validate the JS bundle outside Docker so a
+      # broken build fails the workflow BEFORE we attempt a deploy.
+      - name: Frontend — install deps
+        working-directory: ./frontend
+        run: npm ci
+
+      - name: Frontend — lint
+        working-directory: ./frontend
+        run: npm run lint
+
+      - name: Frontend — build
+        working-directory: ./frontend
+        run: npm run build
+
+  # ---------------------------------------------------------------
+  # 2) deploy — push to server, swap compose to new SHA, verify, with
+  #    automatic rollback to the previous good state on any failure.
+  # ---------------------------------------------------------------
+  deploy:
+    name: Deploy to Server
+    runs-on: ubuntu-latest
+    needs: build
+    timeout-minutes: 15
+    environment: production
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+
+    steps:
       - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1.0.0
+        uses: appleboy/ssh-action@v1.1.0
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USERNAME }}
-          password: ${{ secrets.SERVER_PASSWORD }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          # Don't pull host keys into the action's keyring; we trust
+          # the deployment host. Override with `known_hosts` if you
+          # need strict checking.
+          command_timeout: 15m
+          envs: TRIGGER,GITHUB_SHA,SHORT_SHA,REMOTE_DIR,REGISTRY,IMAGE_OWNER,BACKEND_IMAGE,FRONTEND_IMAGE,BACKEND_TAG,FRONTEND_TAG
+          envs_format: shell
           script: |
-            # Configure Firewall
-            ufw allow 80/tcp
-            ufw allow 443/tcp
-            ufw allow 22/tcp
-            ufw --force enable
-            
-            # Deploy Application
-            cd TelTelDownload
-            git pull origin main
-            echo "ADMIN_USERNAME=${{ secrets.ADMIN_USERNAME }}" > .env
-            echo "ADMIN_PASSWORD=${{ secrets.ADMIN_PASSWORD }}" >> .env
-            # Bypass docker-compose 1.29.2 ContainerConfig bug by removing all old containers first
-            docker-compose down --remove-orphans || true
-            docker ps -aq | xargs -r docker rm -f || true
-            
-            docker-compose up -d --build
-            
-            # Print status to the deployment log
-            echo "--- Verifying Container Status ---"
-            docker ps
-            
-            echo "--- Waiting for Containers to Initialize (15s) ---"
-            sleep 15
-            
-            echo "--- Nginx Logs ---"
-            docker logs --tail 30 teltel_nginx
-            
-            echo "--- Backend Initialization Logs ---"
-            docker logs --tail 50 teltel_backend
-            
-            echo "--- Frontend Initialization Logs ---"
-            docker logs --tail 30 teltel_frontend
-            
-            # Check if backend crashed
-            BACKEND_STATUS=$(docker inspect -f '{{.State.Status}}' teltel_backend)
-            if [ "$BACKEND_STATUS" != "running" ]; then
-              echo "CRITICAL ERROR: Backend container crashed or failed to start!"
+            set -euo pipefail
+
+            # NOTE: `set -x` is intentionally OFF. The `::group::` markers
+            # below produce a clean, collapsible log. If you need to
+            # debug a deploy, replace this line with `set -euxo pipefail`.
+
+            # ============================================================
+            # TelTel deploy log
+            # ============================================================
+            echo "::group::🚀 Deploy started"
+            echo "  trigger     : $TRIGGER"
+            echo "  commit      : $GITHUB_SHA"
+            echo "  short SHA   : $SHORT_SHA"
+            echo "  branch      : main"
+            echo "  target dir  : ~/$REMOTE_DIR"
+            echo "  backend img : $BACKEND_IMAGE:$BACKEND_TAG"
+            echo "  frontend img: $FRONTEND_IMAGE:$FRONTEND_TAG"
+            echo "  started at  : $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+            DEPLOY_START=$SECONDS
+            echo "::endgroup::"
+
+            cd "$HOME/${REMOTE_DIR}"
+
+            # --- Sync to the exact commit the workflow built. ---
+            echo "::group::[1/6] git sync → $GITHUB_SHA"
+            git fetch origin main
+            git reset --hard origin/main
+            echo "  HEAD: $(git log -1 --format='%H %s')"
+            echo "::endgroup::"
+
+            # --- Snapshot the currently-running image tags so we
+            # know what to fall back to if the new deploy fails. ---
+            echo "::group::[2/6] snapshot previous state"
+            PREV_BACKEND="$(docker inspect --format '{{ index .Config.Image }}' teltel_backend 2>/dev/null || echo '<none>')"
+            PREV_FRONTEND="$(docker inspect --format '{{ index .Config.Image }}' teltel_frontend 2>/dev/null || echo '<none>')"
+            PREV_SHA="$(git log -1 --format=%H HEAD~1 2>/dev/null || echo unknown)"
+            echo "  previous backend  : $PREV_BACKEND"
+            echo "  previous frontend : $PREV_FRONTEND"
+            echo "  previous compose  : docker-compose.yml.bak.$PREV_SHA"
+            echo "::endgroup::"
+
+            # --- Save a backup of the *current* compose file so we
+            # can roll back to the previous build via simple copy. ---
+            echo "::group::[3/6] backup compose + patch to SHA"
+            cp docker-compose.yml "docker-compose.yml.bak.$PREV_SHA"
+            echo "  backed up → docker-compose.yml.bak.$PREV_SHA"
+
+            BACKEND_REF="$REGISTRY/$IMAGE_OWNER/$BACKEND_IMAGE:$BACKEND_TAG"
+            FRONTEND_REF="$REGISTRY/$IMAGE_OWNER/$FRONTEND_IMAGE:$FRONTEND_TAG"
+            sed -i "s|^    build: \./backend\$|    image: $BACKEND_REF|" docker-compose.yml
+            sed -i "s|^    build: \./frontend\$|    image: $FRONTEND_REF|" docker-compose.yml
+            echo "  backend  → $BACKEND_REF"
+            echo "  frontend → $FRONTEND_REF"
+            echo "  --- resulting image/build lines ---"
+            grep -E '^\s+(image|build):' docker-compose.yml || true
+            echo "::endgroup::"
+
+            # --- Apply the new stack. We pull first so the up step
+            # is fast and we surface registry errors immediately. ---
+            echo "::group::[4/6] docker-compose pull"
+            docker-compose pull
+            echo "::endgroup::"
+
+            echo "::group::[5/6] docker-compose up -d"
+            docker-compose up -d
+            echo "  --- container status immediately after up ---"
+            docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}'
+            echo "::endgroup::"
+
+            # --- Poll /api/ready for up to 60 seconds. ---
+            echo "::group::[6/6] health-gate (polling /api/ready up to 60s)"
+            READY=0
+            for i in $(seq 1 20); do
+              sleep 3
+              CODE="$(curl -s -o /dev/null -w '%{http_code}' http://localhost:5000/api/ready || echo 000)"
+              echo "  [$i/20] $(date -u +%H:%M:%S)Z  /api/ready → HTTP $CODE"
+              if [ "$CODE" = "200" ]; then
+                READY=1
+                break
+              fi
+            done
+
+            if [ "$READY" -ne 1 ]; then
+              echo "::endgroup::"
+              echo "::error::Health gate FAILED — /api/ready never returned 200. Rolling back."
+
+              echo "::group::⏪ ROLLBACK"
+              if [ -f "docker-compose.yml.bak.$PREV_SHA" ]; then
+                cp "docker-compose.yml.bak.$PREV_SHA" docker-compose.yml
+                echo "  restored compose from docker-compose.yml.bak.$PREV_SHA"
+                docker-compose up -d || true
+              else
+                echo "  !! no backup compose for $PREV_SHA — manual intervention required"
+              fi
+              echo "  --- post-rollback container status ---"
+              docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}' || true
+              echo "  --- last 50 lines of backend log ---"
+              docker logs --tail 50 teltel_backend || true
+              echo "  --- last 30 lines of nginx log ---"
+              docker logs --tail 30 teltel_nginx || true
+              echo "::endgroup::"
+
               exit 1
             fi
+            echo "::endgroup::"
+
+            # --- Record the new "previous" tags for the *next* deploy. ---
+            echo "$PREV_BACKEND"  > ~/teltel-prev-backend.txt
+            echo "$PREV_FRONTEND" > ~/teltel-prev-frontend.txt
+
+            # --- Final summary for the Actions log. ---
+            echo "::group::✅ Deploy $SHORT_SHA succeeded"
+            echo "  duration   : $((SECONDS - DEPLOY_START))s"
+            echo "  finished at: $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+            echo "  --- running containers ---"
+            docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}'
+            echo "  --- last 30 lines of backend log ---"
+            docker logs --tail 30 teltel_backend || true
+            echo "  --- last 15 lines of nginx log ---"
+            docker logs --tail 15 teltel_nginx || true
+            echo "::endgroup::"
