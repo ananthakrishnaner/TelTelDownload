@@ -10,10 +10,7 @@ COPY . .
 # Build the production bundle
 RUN npm run build
 
-# Install a lightweight static server
-RUN npm install -g serve
-
 EXPOSE 5173
 
-# Serve the static files from the dist directory
-CMD ["serve", "-s", "dist", "-l", "5173"]
+# Serve the static files using a lightweight busybox httpd server to prevent NPM OOM
+CMD ["busybox", "httpd", "-f", "-v", "-p", "5173", "-h", "dist"]
