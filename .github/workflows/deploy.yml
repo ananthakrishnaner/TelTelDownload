@@ -289,51 +289,44 @@ jobs:
             docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}'
             echo "::endgroup::"
 
-            # --- Poll /api/ready for up to 60 seconds. ---
-            echo "::group::[6/6] health-gate (polling /api/ready up to 60s)"
+            # --- Poll /api/ready through nginx (port 80 -> 443) for up
+            # to 60 seconds. The backend container is not published on
+            # the host (only nginx has 80/443), so we have to go
+            # through nginx, which proxies /api/* to the backend.
+            echo "::group::[6/6] health-gate (polling https://localhost/api/ready up to 60s)"
             READY=0
             for i in $(seq 1 20); do
               sleep 3
-              CODE="$(curl -s -o /dev/null -w '%{http_code}' http://localhost:5000/api/ready || echo 000)"
+              CODE="$(curl -sk -o /dev/null -w '%{http_code}' https://localhost/api/ready || echo 000)"
               echo "  [$i/20] $(date -u +%H:%M:%S)Z  /api/ready → HTTP $CODE"
               if [ "$CODE" = "200" ]; then
                 READY=1
                 break
               fi
             done
+            echo "::endgroup::"
 
             if [ "$READY" -ne 1 ]; then
-              echo "::endgroup::"
-              echo "::error::Health gate FAILED — /api/ready never returned 200. Rolling back."
-
-              echo "::group::⏪ ROLLBACK"
-              # Remove the broken new containers first so compose
-              # recreates from the rolled-back image instead of
-              # crashing on ContainerConfig again.
-              for c in teltel_backend teltel_frontend; do
-                if docker ps -a --format '{{.Names}}' | grep -q "^${c}\$"; then
-                  echo "  removing failed $c"
-                  docker rm -f "$c" 2>/dev/null || true
-                fi
-              done
-              if [ -f "docker-compose.yml.bak.$PREV_SHA" ]; then
-                cp "docker-compose.yml.bak.$PREV_SHA" docker-compose.yml
-                echo "  restored compose from docker-compose.yml.bak.$PREV_SHA"
-                docker-compose up -d || true
-              else
-                echo "  !! no backup compose for $PREV_SHA — manual intervention required"
-              fi
-              echo "  --- post-rollback container status ---"
-              docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}' || true
-              echo "  --- last 50 lines of backend log ---"
-              docker logs --tail 50 teltel_backend || true
+              # The user explicitly opted out of auto-rollback. Keep
+              # the new containers running, dump the diagnostics, and
+              # mark the workflow as failed. The new image is live
+              # (so we don't strand the cluster on the old one), and
+              # the next push will redeploy.
+              echo "::group::🩺 Health gate FAILED — /api/ready never returned 200 (no rollback, by request)"
+              echo "  --- container status ---"
+              docker ps -a --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}' || true
+              echo "  --- last 80 lines of backend log ---"
+              docker logs --tail 80 teltel_backend 2>&1 || true
+              echo "  --- last 30 lines of frontend log ---"
+              docker logs --tail 30 teltel_frontend 2>&1 || true
               echo "  --- last 30 lines of nginx log ---"
-              docker logs --tail 30 teltel_nginx || true
+              docker logs --tail 30 teltel_nginx 2>&1 || true
+              echo "  --- direct probe to backend inside the docker net ---"
+              docker exec teltel_nginx sh -c "wget -q -O- http://teltel_backend:5000/api/ready 2>&1 || echo 'wget failed: $?'" || true
               echo "::endgroup::"
-
+              echo "::error::Health gate FAILED — backend never came up. New image is live; investigate logs above."
               exit 1
             fi
-            echo "::endgroup::"
 
             # --- Record the new "previous" tags for the *next* deploy. ---
             echo "$PREV_BACKEND"  > ~/teltel-prev-backend.txt
