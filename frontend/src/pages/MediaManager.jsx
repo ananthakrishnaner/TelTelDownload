@@ -30,6 +30,10 @@ export default function MediaManager() {
   const [selected, setSelected] = useState([]);
   const [groups, setGroups] = useState([]);
   const [loading, setLoading] = useState(true);
+  // Per-source count from /media/from-disk: { fromDb, fromDisk, orphans }.
+  // Used by the page description / activity to surface when a file is
+  // on disk but missing from the Media collection (orphan).
+  const [diskStats, setDiskStats] = useState({ fromDb: 0, fromDisk: 0, orphans: 0 });
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -298,7 +302,15 @@ export default function MediaManager() {
       <PageHeader
         eyebrow="Library"
         title="Media Vault"
-        description={`${media.length} item${media.length === 1 ? '' : 's'} downloaded · stored locally at ./media_downloads`}
+        description={
+          // Surface the disk-vs-db split so the user can spot orphans
+          // (files on disk but not in the Media collection). When the
+          // counts agree we just show the simple "X items downloaded"
+          // line for a clean default.
+          diskStats && (diskStats.fromDisk > 0 || diskStats.orphans > 0)
+            ? `${media.length} item${media.length === 1 ? '' : 's'} on disk · ${diskStats.fromDb} in DB${diskStats.orphans > 0 ? ` · ${diskStats.orphans} orphan${diskStats.orphans === 1 ? '' : 's'}` : ''} · stored at ./media_downloads`
+            : `${media.length} item${media.length === 1 ? '' : 's'} downloaded · stored locally at ./media_downloads`
+        }
         accent="media"
         actions={
           <div className="flex items-center gap-2">
