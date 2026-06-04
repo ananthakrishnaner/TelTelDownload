@@ -59,6 +59,7 @@ jobs:
         id: trigger
         run: |
           REASON='${{ inputs.reason || '' }}'
+          OVERRIDE='${{ inputs.tag_override || '' }}'
           if [ "${{ github.event_name }}" = 'workflow_dispatch' ]; then
             echo "name=manual (workflow_dispatch) — ${REASON}" >> "$GITHUB_OUTPUT"
           else
@@ -66,8 +67,8 @@ jobs:
           fi
           # If the operator passed a tag override, use it; otherwise
           # we'll use the commit SHA in the meta step.
-          if [ -n '${{ inputs.tag_override }}' ]; then
-            echo "override=${{ inputs.tag_override }}" >> "$GITHUB_OUTPUT"
+          if [ -n "$OVERRIDE" ]; then
+            echo "override=$OVERRIDE" >> "$GITHUB_OUTPUT"
           else
             echo "override=" >> "$GITHUB_OUTPUT"
           fi
@@ -215,10 +216,13 @@ jobs:
             # deploy relied on shell exports; this is more robust and
             # survives multiple deploys. ---
             echo "::group::[0/6] write .env (ADMIN_USERNAME, ADMIN_PASSWORD)"
-            cat > .env <<EOF
-ADMIN_USERNAME=$ADMIN_USERNAME
-ADMIN_PASSWORD=$ADMIN_PASSWORD
-EOF
+            # Use printf with explicit \n so we don't need a heredoc —
+            # a heredoc inside a YAML block scalar must be indented
+            # the same as the rest of the block, and the EOF terminator
+            # at column 1 closes the YAML scalar early, breaking the
+            # workflow file. printf keeps everything in one line.
+            printf 'ADMIN_USERNAME=%s\nADMIN_PASSWORD=%s\n' \
+              "$ADMIN_USERNAME" "$ADMIN_PASSWORD" > .env
             echo "  ADMIN_USERNAME=$ADMIN_USERNAME"
             echo "  ADMIN_PASSWORD set (len ${#ADMIN_PASSWORD})"
             echo "::endgroup::"
