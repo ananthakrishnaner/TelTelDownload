@@ -82,7 +82,9 @@ export default function Dashboard() {
         api.get('/telegram/job-history').catch(() => ({ data: { history: [] } }))
       ]);
       
-      setMediaStats(statsRes.data || {});
+      const statsObj = {};
+      (statsRes.data || []).forEach(s => statsObj[s._id] = s.count);
+      setMediaStats(statsObj);
       setActiveJobs(jobsRes.data.jobs || []);
       if (historyRes && historyRes.data && historyRes.data.history) {
         setJobHistory(historyRes.data.history);
