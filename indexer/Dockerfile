@@ -1,15 +1,20 @@
 # ---- build stage --------------------------------------------------------
-FROM rust:1.83-bookworm AS build
+# Pinned to Rust 1.96 (current stable, on the bookworm base). We
+# previously used 1.83, but the mongodb 3.7 / bson 2.15 dependency
+# graph ships crates that require the Cargo `edition2024` feature,
+# which was only stabilized in Rust 1.85. Bumping the toolchain
+# is the long-term fix; pinning the crate down is fragile because
+# the next dep upgrade would re-introduce the same break.
+FROM rust:1.96-bookworm AS build
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 # Cache deps separately from source so source changes don't bust the cache.
-# `Cargo.lock` is recommended (committed in-repo for reproducibility) but
-# the `|| true` + a placeholder-writer fallback below keeps the build
-# green for first-time setups or a `cargo update` that doesn't generate
-# one in CI. After the first successful build the lockfile exists and
-# this branch is skipped.
+# `Cargo.lock` is committed in-repo for reproducibility; the `*` glob on
+# the second COPY keeps the build green if a future `cargo update` deletes
+# the lockfile. In that fallback the dep-cache layer resolves from
+# `Cargo.toml` directly (slower, but the build still completes).
 COPY Cargo.toml ./
 COPY Cargo.lock* ./
 RUN mkdir -p src && echo 'fn main() {}' > src/main.rs \
