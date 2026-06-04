@@ -19,6 +19,7 @@ export default function Dashboard() {
   const [showScheduleModal, setShowScheduleModal] = useState(false);
   const [showMediaModal, setShowMediaModal] = useState(false);
   const [selectedGroup, setSelectedGroup] = useState(null);
+  const [activeJobs, setActiveJobs] = useState([]);
   const [jobHistory, setJobHistory] = useState([]);
   const [fileProgresses, setFileProgresses] = useState({});
   const [activeTab, setActiveTab] = useState('active'); // active or history
