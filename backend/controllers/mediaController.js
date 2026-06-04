@@ -430,3 +430,137 @@ exports.getMediaChannels = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
+
+// ============================================================================
+// Image-based reverse search (Rust indexer, see plan §Lookup).
+// ============================================================================
+
+/**
+ * POST /api/media/lookup
+ * Multipart, field "image". Forwards to the Rust indexer, joins matches
+ * with the Media collection, and returns a UI-ready array.
+ */
+exports.searchByImage = async (req, res) => {
+  try {
+    if (!req.file || !req.file.buffer) {
+      return res.status(400).json({ error: 'Missing image field in multipart body' });
+    }
+    const indexerService = require('../services/indexerService');
+    const t0 = Date.now();
+    const result = await indexerService.search(req.file.buffer);
+    const rawMatches = (result && result.matches) || [];
+    const elapsedMs = Date.now() - t0;
+
+    // Join with the Media collection so the frontend can hand a match
+    // straight to the Lightbox.
+    const ids = rawMatches.map((m) => m.media_id).filter(Boolean);
+    let docs = [];
+    if (ids.length > 0) {
+      try {
+        const mongoose = require('mongoose');
+        const objIds = ids
+          .map((s) => { try { return new mongoose.Types.ObjectId(String(s)); } catch (e) { return null; } })
+          .filter(Boolean);
+        docs = await Media.find({ _id: { $in: objIds } });
+      } catch (e) {
+        // ignore — return raw matches only
+      }
+    }
+    const byId = new Map(docs.map((d) => [String(d._id), d]));
+
+    const matches = rawMatches.map((m) => {
+      const doc = byId.get(String(m.media_id));
+      const previewAvailable = !!(doc && doc.localPath && fs.existsSync(doc.localPath));
+      const thumb_url = m.thumb_path
+        ? `/media/${m.thumb_path.replace(/^media\//, '').replace(/^\/+/, '')}`
+        : null;
+      return {
+        media_id: m.media_id,
+        score: m.score,
+        matched_frame_idx: m.matched_frame_idx,
+        thumb_url,
+        file_name: doc ? doc.fileName : m.file_name,
+        channel_id: doc ? doc.channelId : null,
+        telegram_message_id: doc ? doc.telegramMessageId : null,
+        caption: doc ? doc.caption : null,
+        status: doc ? doc.status : null,
+        local_path: doc ? doc.localPath : null,
+        downloaded_at: doc ? doc.downloadedAt : null,
+        preview_available: previewAvailable,
+      };
+    });
+
+    res.json({
+      matches,
+      query_phash: result && result.query_phash,
+      threshold: result && result.threshold,
+      indexed_frames: result && result.indexed_frames,
+      elapsed_ms: elapsedMs,
+    });
+  } catch (err) {
+    const status = err && err.status && err.status < 600 ? err.status : 500;
+    res.status(status).json({ error: err.message, stack: err.stack });
+  }
+};
+
+/**
+ * POST /api/media/reindex
+ * JSON body: { mediaId?: string }
+ * If mediaId is given, reindex that one doc. Otherwise reindex every doc
+ * with phashed !== true. Fire-and-forget: returns { queued } immediately.
+ */
+exports.reindexMedia = async (req, res) => {
+  try {
+    const indexerService = require('../services/indexerService');
+    const { mediaId } = (req.body && typeof req.body === 'object') ? req.body : {};
+    const query = mediaId
+      ? { _id: mediaId }
+      : {
+          fileName: /\.(mp4|mov|webm|m4v|mkv|avi)$/i,
+          $or: [{ phashed: { $ne: true } }, { frames: { $size: 0 } }],
+        };
+    const targets = await Media.find(query).select({ _id: 1, fileName: 1, localPath: 1 }).limit(5000);
+    const queued = [];
+    for (const m of targets) {
+      const fileName = m.fileName;
+      const path = indexerService.buildIndexerPath(fileName);
+      // Don't await; run in background.
+      indexerService.indexFile({ path, mediaId: String(m._id), frames: 5 })
+        .then((r) => Media.updateOne(
+          { _id: m._id },
+          { $set: { frames: r.frames || [], phashed: true, indexedAt: new Date() } },
+        ))
+        .catch((err) => console.warn(`[reindex] ${fileName} -> ${err.message}`));
+      queued.push(String(m._id));
+    }
+    res.json({ queued: queued.length, ids: queued.slice(0, 50) });
+  } catch (err) {
+    res.status(500).json({ error: err.message, stack: err.stack });
+  }
+};
+
+/**
+ * GET /api/media/lookup/thumb/:mediaId/:idx
+ * Fallback: serve a thumbnail from disk. Most clients use the thumb_url
+ * path in /lookup responses (which goes through /media/ -> express.static);
+ * this route is here for parity and for clients that can't hit /media/
+ * (e.g. CSP-blocked frames).
+ */
+exports.getLookupThumb = async (req, res) => {
+  try {
+    const { mediaId, idx } = req.params;
+    const doc = await Media.findById(mediaId).select({ frames: 1 });
+    if (!doc) return res.status(404).json({ error: 'Not found' });
+    const frame = (doc.frames || []).find((f) => String(f.idx) === String(idx));
+    if (!frame || !frame.thumbPath) return res.status(404).json({ error: 'Frame not found' });
+    const downloadDir = path.resolve(__dirname, '..', '..', 'media_downloads');
+    const abs = path.resolve(downloadDir, frame.thumbPath);
+    if (!abs.startsWith(downloadDir + path.sep)) return res.status(400).json({ error: 'bad path' });
+    if (!fs.existsSync(abs)) return res.status(404).json({ error: 'thumb missing on disk' });
+    res.set('content-type', 'image/jpeg');
+    res.set('cache-control', 'public, max-age=86400');
+    fs.createReadStream(abs).pipe(res);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};

@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { FiImage, FiVideo, FiSearch, FiCheck, FiAlertTriangle, FiRefreshCw, FiTrash2 } from 'react-icons/fi';
+import { FiImage, FiVideo, FiSearch, FiCheck, FiAlertTriangle, FiRefreshCw, FiTrash2, FiCamera } from 'react-icons/fi';
 import api from '../services/api';
 import { toast } from '../hooks/useToast';
 import PageHeader from '../components/PageHeader';
@@ -8,6 +8,7 @@ import EmptyState from '../components/EmptyState';
 import Drawer from '../components/Drawer';
 import Lightbox from '../components/Lightbox';
 import CommandBar from '../components/CommandBar';
+import LookupModal from '../components/LookupModal';
 
 const TYPE_FILTERS = [
   { id: 'all', label: 'All' },
@@ -42,6 +43,11 @@ export default function MediaManager() {
   const [syncChannels, setSyncChannels] = useState([]);  // populated for the picker modal
   const [syncPickerOpen, setSyncPickerOpen] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState(null);
+  // Image-based reverse search (see plan §Lookup). The modal writes
+  // back the picked match via onPickMatch, which we resolve to the
+  // matching index in `filtered` so the existing Lightbox opens at
+  // the right item.
+  const [lookupOpen, setLookupOpen] = useState(false);
   const [forwardDrawer, setForwardDrawer] = useState({ open: false, target: '' });
   const [syncing, setSyncing] = useState(false);
   const [wipeStep, setWipeStep] = useState(0);  // 0=closed, 1/2/3=modal steps
@@ -315,6 +321,14 @@ export default function MediaManager() {
         actions={
           <div className="flex items-center gap-2">
             <button
+              onClick={() => setLookupOpen(true)}
+              className="flex items-center gap-2 px-3 py-2 text-xs font-mono uppercase tracking-widest text-amber-200 bg-amber-500/15 hover:bg-amber-500/25 ring-1 ring-amber-500/30 rounded-md transition-colors"
+              title="Find a video frame by uploading a still photo"
+            >
+              <FiCamera size={12} />
+              Find by Photo
+            </button>
+            <button
               onClick={openSyncPicker}
               disabled={syncing}
               className="flex items-center gap-2 px-3 py-2 text-xs font-mono uppercase tracking-widest text-slate-100 bg-sky-500/15 hover:bg-sky-500/25 ring-1 ring-sky-500/30 disabled:opacity-50 disabled:cursor-not-allowed rounded-md transition-colors"
@@ -535,6 +549,33 @@ export default function MediaManager() {
           </button>
         </div>
       )}
+
+      {/* Image-based lookup modal (see plan §Lookup) */}
+      <LookupModal
+        open={lookupOpen}
+        onClose={() => setLookupOpen(false)}
+        onPickMatch={(match) => {
+          // Close the modal and open the existing Lightbox at the
+          // matching item. We re-derive the index from `filtered` so
+          // filter changes (type/status/search) are respected. If the
+          // match isn't in the current filter, clear filters first and
+          // re-resolve against the (now unfiltered) `media` array.
+          const inFiltered = filtered.findIndex((m) => String(m._id) === String(match.media_id));
+          if (inFiltered >= 0) {
+            setLookupOpen(false);
+            setLightboxIndex(inFiltered);
+            return;
+          }
+          setTypeFilter('all');
+          setStatusFilter('all');
+          setSearch('');
+          setLookupOpen(false);
+          // The lightbox uses `filtered`, which is recomputed on the
+          // next render. We don't try to auto-open the lightbox here;
+          // the user can click the matching item in the (now full) grid.
+          toast.info('Filters cleared — the match is in your vault');
+        }}
+      />
 
       {/* Lightbox */}
       {lightboxIndex !== null && (

@@ -268,6 +268,24 @@ async function downloadAndMaybeUpload({ client, jobId, groupId, message, targetG
           existing.status = 'downloaded';
           await existing.save();
         }
+
+        // Fire-and-forget: enqueue pHash indexing for the Rust indexer
+        // (see plan §Lookup). NEVER block the download on this — if the
+        // indexer is down, the backfill script will pick it up later.
+        try {
+          const indexerService = require('./indexerService');
+          const mediaId = String(existing._id);
+          const indexerPath = indexerService.buildIndexerPath(fileName);
+          indexerService.indexFile({ path: indexerPath, mediaId, frames: 5 })
+            .then((result) => Media.updateOne(
+              { _id: existing._id },
+              { $set: { frames: result.frames || [], phashed: true, indexedAt: new Date() } },
+            ))
+            .catch((err) => console.warn(`[indexer] enqueue failed for ${fileName} -> ${err.message} (backfill will retry)`));
+        } catch (e) {
+          // indexerService not importable in some contexts — log and move on.
+          console.warn(`[indexer] enqueue skipped for ${fileName}: ${e.message}`);
+        }
       }
     }
 

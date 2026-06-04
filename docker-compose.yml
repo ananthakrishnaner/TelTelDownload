@@ -18,11 +18,37 @@ services:
       - MONGO_URI=mongodb://mongodb:27017/teltel
       - ADMIN_USERNAME=${ADMIN_USERNAME}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      # pHash indexer (separate Rust container, see plan §Lookup)
+      - INDEXER_URL=http://indexer:9000
+      - INDEXER_MEDIA_DIR=/media
     volumes:
       - ./media_downloads:/usr/src/app/media_downloads
     depends_on:
       - mongodb
+      - indexer
     restart: unless-stopped
+
+  # ---- pHash indexer (Rust, separate container, no public port) ---------
+  # Reachable on the default compose net only as http://indexer:9000.
+  # The Node backend is the only thing that talks to it; nginx and the
+  # public internet never see it.
+  indexer:
+    build: ./indexer
+    container_name: teltel_indexer
+    environment:
+      - PORT=9000
+      - MEDIA_DIR=/media
+      - MONGO_URI=mongodb://mongodb:27017/teltel
+      - INDEXER_HAMMING_THRESHOLD=12
+      - INDEXER_FRAMES_PER_VIDEO=5
+      - INDEXER_REFRESH_SECS=30
+      - RUST_LOG=info
+    volumes:
+      - ./media_downloads:/media
+    depends_on:
+      - mongodb
+    restart: unless-stopped
+    # NOTE: no `ports:` — internal only.
 
   frontend:
     build: ./frontend

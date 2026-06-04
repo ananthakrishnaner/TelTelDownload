@@ -28,6 +28,7 @@ env:
   IMAGE_OWNER: ${{ github.repository_owner }}        # ananthakrishnaner
   BACKEND_IMAGE: teltel-backend
   FRONTEND_IMAGE: teltel-frontend
+  INDEXER_IMAGE: teltel-indexer
   REMOTE_DIR: TelTelDownload
   # Resolved per-job: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/<name>:<tag>
 
@@ -42,8 +43,10 @@ jobs:
     outputs:
       backend_tag: ${{ steps.meta-backend.outputs.version }}
       frontend_tag: ${{ steps.meta-frontend.outputs.version }}
+      indexer_tag: ${{ steps.meta-indexer.outputs.version }}
       backend_image: ${{ steps.meta-backend.outputs.name }}:${{ steps.meta-backend.outputs.version }}
       frontend_image: ${{ steps.meta-frontend.outputs.name }}:${{ steps.meta-frontend.outputs.version }}
+      indexer_image: ${{ steps.meta-indexer.outputs.name }}:${{ steps.meta-indexer.outputs.version }}
       short_sha: ${{ steps.short-sha.outputs.sha }}
       trigger: ${{ steps.trigger.outputs.name }}
 
@@ -105,6 +108,17 @@ jobs:
             ${{ steps.trigger.outputs.override && format('type=raw,value={0}', steps.trigger.outputs.override) || '' }}
           flavor: latest=auto
 
+      - name: Compute indexer metadata
+        id: meta-indexer
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ env.INDEXER_IMAGE }}
+          tags: |
+            type=sha,prefix=
+            type=raw,value=latest
+            ${{ steps.trigger.outputs.override && format('type=raw,value={0}', steps.trigger.outputs.override) || '' }}
+          flavor: latest=auto
+
       - name: Build & push backend
         uses: docker/build-push-action@v6
         with:
@@ -126,6 +140,16 @@ jobs:
           push: true
           tags: ${{ steps.meta-frontend.outputs.tags }}
           labels: ${{ steps.meta-frontend.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max,ignore-error=true
+
+      - name: Build & push indexer
+        uses: docker/build-push-action@v6
+        with:
+          context: ./indexer
+          push: true
+          tags: ${{ steps.meta-indexer.outputs.tags }}
+          labels: ${{ steps.meta-indexer.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max,ignore-error=true
 
@@ -170,8 +194,10 @@ jobs:
           IMAGE_OWNER: ${{ env.IMAGE_OWNER }}
           BACKEND_IMAGE: ${{ env.BACKEND_IMAGE }}
           FRONTEND_IMAGE: ${{ env.FRONTEND_IMAGE }}
+          INDEXER_IMAGE: ${{ env.INDEXER_IMAGE }}
           BACKEND_TAG: ${{ needs.build.outputs.backend_tag }}
           FRONTEND_TAG: ${{ needs.build.outputs.frontend_tag }}
+          INDEXER_TAG: ${{ needs.build.outputs.indexer_tag }}
           # Used to write the host-side .env that compose interpolates.
           ADMIN_USERNAME: ${{ secrets.ADMIN_USERNAME }}
           ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
@@ -186,7 +212,7 @@ jobs:
           # the deployment host. Override with `known_hosts` if you
           # need strict checking.
           command_timeout: 15m
-          envs: TRIGGER,GITHUB_SHA,SHORT_SHA,REMOTE_DIR,REGISTRY,IMAGE_OWNER,BACKEND_IMAGE,FRONTEND_IMAGE,BACKEND_TAG,FRONTEND_TAG,ADMIN_USERNAME,ADMIN_PASSWORD
+          envs: TRIGGER,GITHUB_SHA,SHORT_SHA,REMOTE_DIR,REGISTRY,IMAGE_OWNER,BACKEND_IMAGE,FRONTEND_IMAGE,INDEXER_IMAGE,BACKEND_TAG,FRONTEND_TAG,INDEXER_TAG,ADMIN_USERNAME,ADMIN_PASSWORD
           script: |
             set -euo pipefail
 
@@ -205,6 +231,7 @@ jobs:
             echo "  target dir  : ~/$REMOTE_DIR"
             echo "  backend img : $BACKEND_IMAGE:$BACKEND_TAG"
             echo "  frontend img: $FRONTEND_IMAGE:$FRONTEND_TAG"
+            echo "  indexer img : $INDEXER_IMAGE:$INDEXER_TAG"
             echo "  started at  : $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
             DEPLOY_START=$SECONDS
             echo "::endgroup::"
@@ -239,9 +266,11 @@ jobs:
             echo "::group::[2/6] snapshot previous state"
             PREV_BACKEND="$(docker inspect --format '{{ index .Config.Image }}' teltel_backend 2>/dev/null || echo '<none>')"
             PREV_FRONTEND="$(docker inspect --format '{{ index .Config.Image }}' teltel_frontend 2>/dev/null || echo '<none>')"
+            PREV_INDEXER="$(docker inspect --format '{{ index .Config.Image }}' teltel_indexer 2>/dev/null || echo '<none>')"
             PREV_SHA="$(git log -1 --format=%H HEAD~1 2>/dev/null || echo unknown)"
             echo "  previous backend  : $PREV_BACKEND"
             echo "  previous frontend : $PREV_FRONTEND"
+            echo "  previous indexer  : $PREV_INDEXER"
             echo "  previous compose  : docker-compose.yml.bak.$PREV_SHA"
             echo "::endgroup::"
 
@@ -253,10 +282,13 @@ jobs:
 
             BACKEND_REF="$REGISTRY/$IMAGE_OWNER/$BACKEND_IMAGE:$BACKEND_TAG"
             FRONTEND_REF="$REGISTRY/$IMAGE_OWNER/$FRONTEND_IMAGE:$FRONTEND_TAG"
+            INDEXER_REF="$REGISTRY/$IMAGE_OWNER/$INDEXER_IMAGE:$INDEXER_TAG"
             sed -i "s|^    build: \./backend\$|    image: $BACKEND_REF|" docker-compose.yml
             sed -i "s|^    build: \./frontend\$|    image: $FRONTEND_REF|" docker-compose.yml
+            sed -i "s|^    build: \./indexer\$|    image: $INDEXER_REF|" docker-compose.yml
             echo "  backend  → $BACKEND_REF"
             echo "  frontend → $FRONTEND_REF"
+            echo "  indexer  → $INDEXER_REF"
             echo "  --- resulting image/build lines ---"
             grep -E '^\s+(image|build):' docker-compose.yml || true
             echo "::endgroup::"
@@ -275,7 +307,7 @@ jobs:
             # Remove the affected containers first so up has to recreate
             # them from scratch instead of trying to converge.
             echo "::group::[5/6] docker-compose up -d"
-            for c in teltel_backend teltel_frontend; do
+            for c in teltel_backend teltel_frontend teltel_indexer; do
               if docker ps -a --format '{{.Names}}' | grep -q "^${c}\$"; then
                 echo "  removing old $c (workaround for compose 1.29.2 ContainerConfig bug)"
                 docker rm -f "$c" 2>/dev/null || true
@@ -307,11 +339,6 @@ jobs:
             echo "::endgroup::"
 
             if [ "$READY" -ne 1 ]; then
-              # The user explicitly opted out of auto-rollback. Keep
-              # the new containers running, dump the diagnostics, and
-              # mark the workflow as failed. The new image is live
-              # (so we don't strand the cluster on the old one), and
-              # the next push will redeploy.
               echo "::group::🩺 Health gate FAILED — /api/ready never returned 200 (no rollback, by request)"
               echo "  --- container status ---"
               docker ps -a --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}' || true
@@ -319,6 +346,8 @@ jobs:
               docker logs --tail 80 teltel_backend 2>&1 || true
               echo "  --- last 30 lines of frontend log ---"
               docker logs --tail 30 teltel_frontend 2>&1 || true
+              echo "  --- last 30 lines of indexer log ---"
+              docker logs --tail 30 teltel_indexer 2>&1 || true
               echo "  --- last 30 lines of nginx log ---"
               docker logs --tail 30 teltel_nginx 2>&1 || true
               echo "  --- direct probe to backend inside the docker net ---"
@@ -328,9 +357,33 @@ jobs:
               exit 1
             fi
 
+            # --- Non-blocking second poll: /api/ready-strict also checks
+            # the Rust indexer container. The indexer being slow to start
+            # does NOT fail the deploy (the backfill will catch any unindexed
+            # videos) — we just log a warning if it never comes up. Flip the
+            # exit-1 to a hard gate later if you want a stricter rollout. ---
+            echo "::group::[7/6] non-blocking poll: /api/ready-strict (indexer)"
+            STRICT_READY=0
+            for i in $(seq 1 10); do
+              sleep 2
+              BODY="$(curl -sk https://localhost/api/ready-strict || echo '')"
+              if echo "$BODY" | grep -q '"ready":true'; then
+                STRICT_READY=1
+                echo "  [$i/10] $(date -u +%H:%M:%S)Z  /api/ready-strict → 200 (indexer OK)"
+                break
+              fi
+              echo "  [$i/10] $(date -u +%H:%M:%S)Z  /api/ready-strict → not yet"
+            done
+            if [ "$STRICT_READY" -ne 1 ]; then
+              echo "  ⚠️  /api/ready-strict never returned 200; indexer may be slow to start. Not failing the deploy."
+              docker logs --tail 30 teltel_indexer 2>&1 || true
+            fi
+            echo "::endgroup::"
+
             # --- Record the new "previous" tags for the *next* deploy. ---
             echo "$PREV_BACKEND"  > ~/teltel-prev-backend.txt
             echo "$PREV_FRONTEND" > ~/teltel-prev-frontend.txt
+            echo "$PREV_INDEXER"  > ~/teltel-prev-indexer.txt
 
             # --- Final summary for the Actions log. ---
             echo "::group::✅ Deploy $SHORT_SHA succeeded"
@@ -340,6 +393,8 @@ jobs:
             docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}'
             echo "  --- last 30 lines of backend log ---"
             docker logs --tail 30 teltel_backend || true
+            echo "  --- last 30 lines of indexer log ---"
+            docker logs --tail 30 teltel_indexer || true
             echo "  --- last 15 lines of nginx log ---"
             docker logs --tail 15 teltel_nginx || true
             echo "::endgroup::"
