@@ -7,7 +7,7 @@ services:
     ports:
       - "27017:27017"
     volumes:
-      - ./database:/data/db
+      - mongo_data:/data/db
     restart: unless-stopped
 
   backend:
@@ -47,4 +47,5 @@ services:
       - backend
     restart: unless-stopped
 
-# Removed named volume mongo_data as we are using host mapping
+volumes:
+  mongo_data:
