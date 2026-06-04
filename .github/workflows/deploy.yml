@@ -131,6 +131,20 @@ jobs:
     steps:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.1.0
+        env:
+          # All values are passed via the step-level `env:` block, and
+          # selected for transfer to the remote script via `envs:` below.
+          # See https://github.com/appleboy/ssh-action#pass-environment
+          TRIGGER: ${{ needs.build.outputs.trigger }}
+          GITHUB_SHA: ${{ github.sha }}
+          SHORT_SHA: ${{ needs.build.outputs.short_sha }}
+          REMOTE_DIR: ${{ env.REMOTE_DIR }}
+          REGISTRY: ${{ env.REGISTRY }}
+          IMAGE_OWNER: ${{ env.IMAGE_OWNER }}
+          BACKEND_IMAGE: ${{ env.BACKEND_IMAGE }}
+          FRONTEND_IMAGE: ${{ env.FRONTEND_IMAGE }}
+          BACKEND_TAG: ${{ needs.build.outputs.backend_tag }}
+          FRONTEND_TAG: ${{ needs.build.outputs.frontend_tag }}
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USERNAME }}
@@ -143,7 +157,6 @@ jobs:
           # need strict checking.
           command_timeout: 15m
           envs: TRIGGER,GITHUB_SHA,SHORT_SHA,REMOTE_DIR,REGISTRY,IMAGE_OWNER,BACKEND_IMAGE,FRONTEND_IMAGE,BACKEND_TAG,FRONTEND_TAG
-          envs_format: shell
           script: |
             set -euo pipefail
 
