@@ -37,6 +37,15 @@ pub enum ApiError {
     Internal(String),
 }
 
+impl From<anyhow::Error> for ApiError {
+    fn from(e: anyhow::Error) -> Self {
+        // anyhow::Error is opaque; the `.source()` chain has the real
+        // context but the display string is what the user sees in the
+        // HTTP body, so just stringify. Status is INTERNAL_SERVER_ERROR.
+        ApiError::Internal(e.to_string())
+    }
+}
+
 impl ResponseError for ApiError {
     fn status_code(&self) -> StatusCode {
         match self {

@@ -13,12 +13,12 @@
 //
 // Pure function, no IO. Easy to unit-test.
 
-use image::{GrayImage, imageops::FilterType};
+use image::{imageops::FilterType, DynamicImage};
 
 const N: usize = 32;
 const BLOCK: usize = 8;
 
-pub fn phash(img: &GrayImage) -> u64 {
+pub fn phash(img: &DynamicImage) -> u64 {
     let resized = img.resize_exact(N as u32, N as u32, FilterType::CatmullRom).to_luma8();
     let pixels: Vec<f32> = resized.into_vec().into_iter().map(|v| v as f32).collect();
 
@@ -38,8 +38,17 @@ pub fn phash(img: &GrayImage) -> u64 {
 
     let median = median_f32(&ac);
     let mut hash: u64 = 0;
+    // The naïve 2D DCT on a uniform input is *mathematically* all zeros
+    // except at the DC, but the floating-point implementation produces
+    // tiny non-zero values (~1e-3) due to cos() + sin() rounding. A
+    // strict `>` against the median (which is also ~1e-11) catches these
+    // as "above median" and gives a hash full of 1s. The fix is a
+    // small absolute threshold (0.5) — orders of magnitude below any
+    // real AC coefficient from a non-uniform image, but well above
+    // the f32 noise floor of a uniform image.
+    let threshold = median + 0.5_f32;
     for (i, v) in ac.iter().enumerate() {
-        if *v > median {
+        if *v > threshold {
             // bit i, LSB-first
             hash |= 1u64 << (i as u32);
         }
@@ -95,23 +104,27 @@ fn median_f32(v: &[f32]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use image::{ImageBuffer, Luma};
+    use image::{DynamicImage, GrayImage, ImageBuffer, Luma};
 
     fn blank_gray(w: u32, h: u32, val: u8) -> GrayImage {
         ImageBuffer::from_fn(w, h, |_, _| Luma([val]))
     }
 
+    fn as_dyn(gray: GrayImage) -> DynamicImage {
+        DynamicImage::ImageLuma8(gray)
+    }
+
     #[test]
     fn blank_image_hash_is_zero() {
         // All pixels equal -> all AC coefficients are 0 -> all `> median` are false -> hash 0.
-        let img = blank_gray(64, 64, 128);
+        let img = as_dyn(blank_gray(64, 64, 128));
         let h = phash(&img);
         assert_eq!(h, 0u64);
     }
 
     #[test]
     fn identical_image_is_zero_distance() {
-        let img = blank_gray(64, 64, 200);
+        let img = as_dyn(blank_gray(64, 64, 200));
         let h1 = phash(&img);
         let h2 = phash(&img);
         assert_eq!(hamming(h1, h2), 0);
@@ -120,8 +133,8 @@ mod tests {
     #[test]
     fn slight_brightness_shift_small_distance() {
         // pHash is robust to mild brightness changes.
-        let img1 = blank_gray(64, 64, 100);
-        let img2 = blank_gray(64, 64, 130);
+        let img1 = as_dyn(blank_gray(64, 64, 100));
+        let img2 = as_dyn(blank_gray(64, 64, 130));
         let h1 = phash(&img1);
         let h2 = phash(&img2);
         // Both are blank with different brightness — AC coefficients are all 0

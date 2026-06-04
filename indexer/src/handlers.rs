@@ -8,7 +8,7 @@ use actix_multipart::Multipart;
 use actix_web::{get, post, web, HttpResponse};
 use chrono::Utc;
 use futures_util::StreamExt;
-use image::{ImageBuffer, Luma};
+// (image is referenced through fully-qualified paths below; no use needed)
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -100,7 +100,7 @@ pub async fn index_video(
     let mut resp_frames: Vec<IndexRespFrame> = Vec::with_capacity(frames.len());
 
     for f in &frames {
-        let hash = compute_phash(&f.img.to_luma8());
+        let hash = compute_phash(&f.img);
         let thumb_name = format!("{}.jpg", f.idx);
         let thumb_abs = thumbs_dir.join(&thumb_name);
         let thumb_rel = format!("thumbs/{}/{}.jpg", body.media_id, thumb_name);
@@ -210,8 +210,7 @@ pub async fn search(
     // Decode + pHash the probe.
     let img = image::load_from_memory(&bytes)
         .map_err(|e| ApiError::BadRequest(format!("decode probe image: {}", e)))?;
-    let gray = img.to_luma8();
-    let query_hash = compute_phash(&gray);
+    let query_hash = compute_phash(&img);
 
     // Top-K over the in-memory index.
     let index_snapshot = state.index.read().await.clone();
@@ -229,6 +228,6 @@ pub async fn search(
 
 /// Used by `cargo test` to round-trip an image through `phash`.
 #[allow(dead_code)]
-pub fn _test_hash_from_gray(img: &ImageBuffer<Luma<u8>, Vec<u8>>) -> u64 {
+pub fn _test_hash_from_dyn(img: &image::DynamicImage) -> u64 {
     compute_phash(img)
 }
