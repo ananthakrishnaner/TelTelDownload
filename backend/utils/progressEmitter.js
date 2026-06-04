@@ -42,12 +42,48 @@ const jobState = new Map();
 //   startedAt, lastTickAt, lastCurrent,
 //   rateEma (items/sec), etaMs,
 //   bytesTotal, bytesDone,
-//   currentFile: { msgId, fileName, type, bytesPerSec } | null,
+//   currentFile: { msgId, fileName, type, bytesPerSec, percent } | null,
+//   currentFiles: [..in-flight],       // one entry per concurrent download
 //   _abortController,                  // optional AbortController
 //   _completionHistory: [..last 5],    // {at, name, ok}
 // }
 
 function nowMs() { return Date.now(); }
+
+/**
+ * Maintain the in-flight file list for a job. The list is keyed by
+ * msgId so byteProgress callbacks for the same file update in place
+ * (no flicker in the UI). When a file completes/skipped/fails, the
+ * matching entry is removed.
+ */
+function _upsertInFlight(s, info) {
+  if (!s) return;
+  if (!Array.isArray(s.currentFiles)) s.currentFiles = [];
+  if (!info) return;
+  const idx = s.currentFiles.findIndex((f) => f.msgId === info.msgId);
+  const entry = {
+    msgId: info.msgId,
+    fileName: info.fileName,
+    type: info.type,
+    bytesPerSec: info.bytesPerSec || 0,
+    percent: typeof info.percent === 'number' ? info.percent : 0,
+    current: info.current,
+    total: info.total,
+    startedAt: info.startedAt || nowMs(),
+  };
+  if (idx >= 0) s.currentFiles[idx] = { ...s.currentFiles[idx], ...entry };
+  else s.currentFiles.push(entry);
+  // Keep `currentFile` set to the most-recently-touched entry so the
+  // existing single-file UI (Dashboard pulse, simple progress row)
+  // still works.
+  s.currentFile = entry;
+}
+
+function _removeInFlight(s, msgId) {
+  if (!s || !Array.isArray(s.currentFiles)) return;
+  s.currentFiles = s.currentFiles.filter((f) => f.msgId !== msgId);
+  s.currentFile = s.currentFiles[s.currentFiles.length - 1] || null;
+}
 
 function getOrInit(jobId, seed) {
   let s = jobState.get(jobId);
@@ -91,6 +127,7 @@ function emitV2(jobId) {
     etaMs: s.etaMs,            // ms until done; null if unknown
     bytesPerSec: s._bps || 0,  // bytes/sec (for current file)
     currentFile: s.currentFile || null,
+    currentFiles: Array.isArray(s.currentFiles) ? s.currentFiles : [],
     startedAt: s.startedAt,
   };
   io.emit('job_progress_v2', payload);
@@ -142,6 +179,7 @@ function startJob({ jobId, type, groupId, taskId, taskName, total, abortControll
   s.etaMs = null;
   s._abortController = abortController || null;
   s.currentFile = null;
+  s.currentFiles = [];
   s._log = [];     // activity log for this job (capped)
   emitV2(jobId);
 }
@@ -162,17 +200,18 @@ function log(jobId, level, message, extra = null) {
   if (io) io.emit('job_log', { jobId, at: nowMs(), level, message, ...(extra || {}) });
 }
 
-/** Mark the file currently in flight for the job — for UI "current" column. */
+/** Mark the file currently in flight for the job — for UI "current" column.
+ *  When concurrency > 1 (e.g. 2 simultaneous downloads), the in-flight
+ *  list carries every active file so the UI can show per-file
+ *  progress rows side by side. Removal from the in-flight list is
+ *  handled by the fileCompleted/fileSkipped/fileFailed handlers
+ *  (keyed by msgId).
+ */
 function setCurrentFile(jobId, info) {
   const s = jobState.get(jobId);
   if (!s) return;
-  s.currentFile = info ? {
-    msgId: info.msgId,
-    fileName: info.fileName,
-    type: info.type,
-    bytesPerSec: info.bytesPerSec || 0,
-    startedAt: info.startedAt || nowMs(),
-  } : null;
+  if (!info) return;
+  _upsertInFlight(s, info);
 }
 
 /** Track rolling per-file bytes/sec. */
@@ -187,7 +226,7 @@ function noteBytes(jobId, msgId, deltaBytes) {
 function fileCompleted(jobId, { groupId, msgId, fileName } = {}) {
   const s = getOrInit(jobId, { groupId });
   s.current += 1;
-  s.currentFile = null;
+  _removeInFlight(s, msgId);
   recalcRate(jobId);
   // Also fire the legacy per-file complete event so existing UI works.
   const io = socket.getIO();
@@ -202,7 +241,7 @@ function fileSkipped(jobId, { groupId, reason, msgId, fileName, telegramLink } =
   const s = getOrInit(jobId, { groupId });
   s.skipped += 1;
   s.current += 1;
-  s.currentFile = null;
+  _removeInFlight(s, msgId);
   recalcRate(jobId);
   // Log every skip with a reason so the user can see why a file was
   // skipped (duplicate, already on disk, etc.).
@@ -220,7 +259,7 @@ function fileFailed(jobId, { groupId, msgId, fileName, error } = {}) {
   const s = getOrInit(jobId, { groupId });
   s.failed += 1;
   // Failed items still take time but don't advance current.
-  s.currentFile = null;
+  _removeInFlight(s, msgId);
   recalcRate(jobId);
   if (error) {
     log(jobId, 'error', `${error.message || error}${fileName ? ` · ${fileName}` : ''}`, {
@@ -240,16 +279,22 @@ function byteProgress({ jobId, groupId, msgId, fileName, type, current, total })
   const percentage = Math.round((Number(current) / Number(total)) * 100);
   io.emit('progress', { type, groupId, msgId, fileName, progress: percentage });
 
-  // Throttle v2 by-byte extension. We don't emit v2 on every byte; v2 is
-  // a job-level summary. Instead, track per-file bytes for the
-  // bytesPerSec stat. We don't broadcast per-byte v2.
+  // Throttle the in-flight update. We update the per-file entry on the
+  // job state (so the next v2 emit carries the new percent) and emit
+  // a v2 every PER_BYTE_THROTTLE_MS so concurrent downloads show
+  // per-file progress in the UI without flooding the socket.
   const key = `${jobId || 'nojob'}:${msgId || 'nomsg'}`;
   const last = lastEmit.get(key) || 0;
   const now = nowMs();
+  const s = jobState.get(jobId);
+  if (s) {
+    _upsertInFlight(s, { jobId, msgId, fileName, type, current, total, percent: percentage });
+  }
   if (now - last < PER_BYTE_THROTTLE_MS) return;
   lastEmit.set(key, now);
   // Clear the key after a brief idle so the map doesn't grow forever.
   setTimeout(() => lastEmit.delete(key), PER_BYTE_THROTTLE_MS * 5);
+  if (s) emitV2(jobId);
 }
 
 /** A file finished (legacy). */
@@ -265,6 +310,7 @@ function endJob(jobId, { status } = {}) {
   s.status = status || (s.failed > 0 ? 'partial' : 'completed');
   s.etaMs = 0;
   s.currentFile = null;
+  s.currentFiles = [];
   emitV2(jobId);
   const io = socket.getIO();
   io.emit('job_done', {
@@ -293,6 +339,7 @@ function stopJob(jobId, { reason } = {}) {
   if (s.status !== 'running') return { ok: false, reason: `already_${s.status}`, state: s };
   s.status = 'aborted';
   s.currentFile = null;
+  s.currentFiles = [];
   if (s._abortController) {
     try { s._abortController.abort(); } catch (_) {}
   }
@@ -323,6 +370,7 @@ function snapshotForIds(ids = null) {
       etaMs: s.etaMs,
       startedAt: s.startedAt,
       currentFile: s.currentFile,
+      currentFiles: Array.isArray(s.currentFiles) ? s.currentFiles : [],
       recentLog: (s._log || []).slice(-10),
     });
   }

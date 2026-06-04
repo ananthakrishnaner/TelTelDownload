@@ -3,6 +3,7 @@ const router = express.Router();
 const mediaController = require('../controllers/mediaController');
 
 router.get('/', mediaController.getMedia);
+router.get('/from-disk', mediaController.getMediaFromDisk);
 router.get('/stats', mediaController.getMediaStats);
 router.get('/channels', mediaController.getMediaChannels);
 router.delete('/:id', mediaController.deleteMedia);

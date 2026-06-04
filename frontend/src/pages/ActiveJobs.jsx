@@ -147,6 +147,7 @@ export default function ActiveJobs() {
           rate: p.rate,
           etaMs: p.etaMs,
           currentFile: p.currentFile,
+          currentFiles: Array.isArray(p.currentFiles) ? p.currentFiles : ((idx >= 0 && prev[idx].currentFiles) || []),
           startedAt: p.startedAt,
         };
         if (idx >= 0) next[idx] = merged; else next.push(merged);
@@ -440,17 +441,52 @@ export default function ActiveJobs() {
                   <Mini label="Remaining"  value={remaining.toLocaleString()} />
                 </div>
 
-                {/* Current file */}
-                {job.currentFile && job.status === 'running' && (
-                  <div className="mt-3 px-3 py-2 rounded bg-white/[0.03] border border-[var(--color-hairline)] flex items-center gap-3">
-                    <FiActivity className="text-sky-400 animate-pulse" size={12} />
-                    <span className="text-[10px] font-mono uppercase tracking-widest text-slate-500">now</span>
-                    <span className="text-xs font-mono text-slate-200 truncate flex-1 min-w-0">
-                      {job.currentFile.fileName || `msg ${job.currentFile.msgId}`}
-                    </span>
-                    <span className="text-[10px] font-mono text-slate-500 tnum">
-                      {formatBytes(job.currentFile.bytesPerSec)}/s
-                    </span>
+                {/* In-flight files (one row per concurrent download) */}
+                {job.status === 'running' && (job.currentFiles?.length > 0 || job.currentFile) && (
+                  <div className="mt-3 space-y-1.5">
+                    <div className="text-[10px] font-mono uppercase tracking-widest text-slate-500 flex items-center gap-2">
+                      <FiActivity className="text-sky-400 animate-pulse" size={10} />
+                      <span>
+                        in flight
+                        {job.currentFiles?.length > 1 ? ` · ${job.currentFiles.length} parallel` : ''}
+                      </span>
+                    </div>
+                    {(() => {
+                      // Prefer the multi-file list; fall back to the
+                      // legacy single-file entry for backward compat.
+                      const list = (job.currentFiles && job.currentFiles.length > 0)
+                        ? job.currentFiles
+                        : (job.currentFile ? [job.currentFile] : []);
+                      return list.map((cf) => (
+                        <div
+                          key={cf.msgId + ':' + cf.fileName}
+                          className="px-3 py-2 rounded bg-white/[0.03] border border-[var(--color-hairline)] flex items-center gap-3"
+                        >
+                          <span className="text-[10px] font-mono uppercase tracking-widest text-sky-400/80 w-12 shrink-0">
+                            {cf.type || 'download'}
+                          </span>
+                          <span className="text-xs font-mono text-slate-200 truncate flex-1 min-w-0">
+                            {cf.fileName || `msg ${cf.msgId}`}
+                          </span>
+                          {typeof cf.percent === 'number' && cf.percent > 0 && (
+                            <div className="hidden sm:flex items-center gap-2 w-40">
+                              <div className="flex-1 h-1.5 bg-white/5 rounded overflow-hidden">
+                                <div
+                                  className="h-full bg-sky-400/70 transition-all"
+                                  style={{ width: `${Math.min(100, cf.percent)}%` }}
+                                />
+                              </div>
+                              <span className="text-[10px] font-mono text-slate-400 tnum w-8 text-right">
+                                {Math.min(100, Math.round(cf.percent))}%
+                              </span>
+                            </div>
+                          )}
+                          <span className="text-[10px] font-mono text-slate-500 tnum">
+                            {formatBytes(cf.bytesPerSec)}/s
+                          </span>
+                        </div>
+                      ));
+                    })()}
                   </div>
                 )}
 

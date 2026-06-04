@@ -21,12 +21,14 @@ const { createLimiter } = require('../utils/concurrency');
 // Outer-loop concurrency: how many messages we download in parallel.
 // Telegram's rate limits on `messages.getMedia` and the part-fetch
 // endpoints comfortably allow 3 concurrent in-flight file downloads
-// per account. 5 is a good "feels fast without getting banned"
-// number; 1 is the historical default and the reason downloads
-// crawled. Override per-job via the env var GROUP_PULL_CONCURRENCY.
+// per account. The user explicitly wants 2 simultaneous video
+// downloads with per-file progress visible in the Active Jobs page —
+// the default of 2 keeps us under the FLOOD_WAIT threshold while
+// still showing meaningful parallelism in the UI. Override per-job
+// via the env var GROUP_PULL_CONCURRENCY.
 const GROUP_PULL_CONCURRENCY = Math.max(
   1,
-  parseInt(process.env.GROUP_PULL_CONCURRENCY || '5', 10) || 5,
+  parseInt(process.env.GROUP_PULL_CONCURRENCY || '2', 10) || 2,
 );
 const logActivity = require('../utils/logger');
 
@@ -202,6 +204,11 @@ async function downloadAndMaybeUpload({ client, jobId, groupId, message, targetG
 
   try {
     if (!existing || !fs.existsSync(filePath)) {
+      // Register the file as in-flight on the job's currentFiles list
+      // BEFORE the first byte arrives, so the Active Jobs UI can show
+      // a per-file progress row from the very start. With concurrency
+      // = 2 the user sees 2 rows.
+      progressEmitter.setCurrentFile(jobId, { msgId, fileName, type: 'download' });
       progressEmitter.byteProgress({ jobId, groupId, msgId, fileName, type: 'download', current: 0, total: 1 });
       // `workers` is the per-message multipart fetch parallelism in
       // gramme.js — it spawns N parallel HTTP requests to download
@@ -318,6 +325,13 @@ async function downloadMediaForGroup(groupId, targetGroupId = null, { taskId = n
   let downloadedCount = 0;
   let skippedCount = 0;
   let failedCount = 0;
+  // Track messages that failed in the first pass so we can give them
+  // one more shot at the end. The user's expectation: "if any video
+  // failed to download, skip and move to other video and retry at
+  // last to download that particular one — still failed, skip on
+  // that video". So we never block the batch on a single bad message,
+  // and we never retry more than once.
+  const failedMessages = [];
 
   const tasks = validMessages.map((message) => limit(async ({ signal }) => {
     if (signal.aborted) return { skipped: true };
@@ -332,12 +346,16 @@ async function downloadMediaForGroup(groupId, targetGroupId = null, { taskId = n
         },
       });
       if (result.skipped) skippedCount += 1;
-      else if (result.error) failedCount += 1;
+      else if (result.error) {
+        failedCount += 1;
+        failedMessages.push({ message, reason: result.error.message || String(result.error) });
+      }
       else downloadedCount += 1;
       return result;
     } catch (err) {
       // Per-message failures shouldn't kill the whole batch.
       failedCount += 1;
+      failedMessages.push({ message, reason: err.message });
       progressEmitter.fileFailed(jobId, {
         groupId, msgId: message.id, fileName: null, reason: err.message,
       });
@@ -350,6 +368,75 @@ async function downloadMediaForGroup(groupId, targetGroupId = null, { taskId = n
   // Wait for everything to settle. limit.drain resolves once every
   // queued + in-flight task is finished (or aborted).
   await Promise.all(tasks);
+
+  // ---- Final retry pass ------------------------------------------------
+  // Walk every message that errored in the first pass and try ONCE
+  // more, sequentially and with a small inter-attempt delay. A retry
+  // often succeeds when the cause was a transient rate-limit / FLOOD
+  // wait / short network blip, and the per-message backoff inside
+  // `retryWithBackoff` has already burned its budget. By doing this
+  // at the end of the job, we don't slow down the rest of the batch.
+  //
+  // Whatever still fails after this is final — we mark it failed and
+  // move on, as the user requested.
+  if (failedMessages.length > 0 && !abortController.signal.aborted) {
+    progressEmitter.log(jobId, 'warning',
+      `Retrying ${failedMessages.length} previously-failed message(s) at end of batch`);
+    let retryRecovered = 0;
+    let retryStillFailed = 0;
+    for (const { message, reason: firstReason } of failedMessages) {
+      if (abortController.signal.aborted) break;
+      // Skip if a concurrent pass already succeeded (e.g. an admin
+      // uploaded the file manually). `existing` will reflect that.
+      const existing = await Media.findOne({ telegramMessageId: message.id, channelId: groupId });
+      if (existing && existing.status === 'downloaded' && fs.existsSync(existing.localPath)) {
+        retryRecovered += 1;
+        failedCount = Math.max(0, failedCount - 1);
+        progressEmitter.log(jobId, 'info', `msg ${message.id} recovered externally — skipping retry`);
+        continue;
+      }
+      // Light backoff between retries to ease back onto the API.
+      await new Promise((r) => setTimeout(r, 1500));
+      try {
+        const result = await downloadAndMaybeUpload({
+          client, jobId, groupId, message, targetGroupId,
+          downloadDir, abortSignal: abortController.signal,
+          onRetry: ({ attempt, waitMs, reason }) => {
+            progressEmitter.log(jobId, 'warning',
+              `Final-retry ${attempt} for msg ${message.id} in ${waitMs}ms (${reason})`);
+          },
+        });
+        if (result && result.error) {
+          retryStillFailed += 1;
+          progressEmitter.log(jobId, 'error',
+            `Final retry failed for msg ${message.id}: ${result.error.message || result.error} (was: ${firstReason}) — skipping`);
+          // Mark the doc as failed so the UI surfaces it correctly.
+          if (existing) {
+            try {
+              existing.status = 'failed';
+              existing.lastError = result.error.message || String(result.error);
+              await existing.save();
+            } catch (e) { /* ignore */ }
+          }
+        } else if (result && result.skipped) {
+          // Was a duplicate or pre-existing on disk — count as a win.
+          retryRecovered += 1;
+          failedCount = Math.max(0, failedCount - 1);
+        } else {
+          retryRecovered += 1;
+          failedCount = Math.max(0, failedCount - 1);
+          downloadedCount += 1;
+          progressEmitter.log(jobId, 'info', `Final retry recovered msg ${message.id}`);
+        }
+      } catch (err) {
+        retryStillFailed += 1;
+        progressEmitter.log(jobId, 'error',
+          `Final retry threw for msg ${message.id}: ${err.message} — skipping`);
+      }
+    }
+    progressEmitter.log(jobId, 'info',
+      `Final retry summary: ${retryRecovered} recovered, ${retryStillFailed} still failing (skipped)`);
+  }
 
   progressEmitter.log(jobId, 'info',
     `Group pull finished: ${downloadedCount} new, ${skippedCount} skipped, ${failedCount} failed`);

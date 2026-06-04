@@ -130,16 +130,19 @@ export default function MediaManager() {
   async function fetchMedia() {
     try {
       setLoading(true);
-      // Pull a large page so most users see their whole library in one
-      // shot. The backend caps at `limit`; for very large libraries
-      // the user can hit "Load more" at the bottom of the grid.
-      const params = { page: 1, limit: 1000 };
+      // Source of truth = the on-disk directory. This endpoint walks
+      // ./media_downloads/ and returns every file, including orphans
+      // (files present on disk but not yet in the Media collection).
+      // We explicitly do NOT touch disk here — read-only scan.
+      const params = { page: 1, limit: 300 };
       if (channelFilter !== 'all') params.channelId = channelFilter;
-      const res = await api.get('/media', { params });
+      if (typeFilter !== 'all') params.type = typeFilter;
+      const res = await api.get('/media/from-disk', { params });
       const incoming = res.data.media || [];
       setMedia(incoming);
       setHasMore((res.data.total || 0) > incoming.length);
       setTotalCount(res.data.total || incoming.length);
+      setDiskStats(res.data.source || { fromDb: 0, fromDisk: 0, orphans: 0 });
     } catch (err) {
       toast.error('Failed to load media', { description: err.message });
     } finally {
@@ -155,11 +158,20 @@ export default function MediaManager() {
     try {
       setLoadingMore(true);
       const next = pageRef.current + 1;
-      const res = await api.get('/media', { params: { page: next, limit: 1000 } });
+      const params = { page: next, limit: 300 };
+      if (channelFilter !== 'all') params.channelId = channelFilter;
+      if (typeFilter !== 'all') params.type = typeFilter;
+      const res = await api.get('/media/from-disk', { params });
       const incoming = res.data.media || [];
       pageRef.current = next;
-      setMedia((prev) => [...prev, ...incoming]);
-      setHasMore(media.length + incoming.length < (res.data.total || 0));
+      // Use the functional updater for setMedia so we can compute the
+      // new total from `prev` (avoids reading a stale closure of
+      // `media`).
+      setMedia((prev) => {
+        const merged = [...prev, ...incoming];
+        setHasMore(merged.length < (res.data.total || 0));
+        return merged;
+      });
     } catch (err) {
       toast.error('Load more failed', { description: err.message });
     } finally {

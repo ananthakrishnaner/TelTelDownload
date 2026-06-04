@@ -1,5 +1,6 @@
 const Media = require('../models/Media');
 const fs = require('fs');
+const path = require('path');
 
 exports.getMedia = async (req, res) => {
   try {
@@ -26,6 +27,152 @@ exports.getMedia = async (req, res) => {
     });
 
     res.json({ media: enriched, total, pages: Math.ceil(total / limit) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+/**
+ * GET /api/media/from-disk
+ *
+ * Authoritative listing: walks ./media_downloads/ and returns EVERY file
+ * that exists on disk, regardless of whether the Media Mongo doc is
+ * present. The user explicitly wants the Vault to reflect the actual
+ * storage, not "what the database happens to know about".
+ *
+ * This is the only endpoint the UI now needs for the main grid. It
+ * does NOT touch the database, and it does NOT delete anything — it
+ * only reads.
+ *
+ * Reconciles two cases that the DB-only listing misses:
+ *   - Orphan file on disk (no Media doc, e.g. download succeeded but
+ *     Media.create was skipped on a duplicate-detection path)
+ *   - Media doc exists but the file is gone (forwarded + unlinked,
+ *     or wiped from disk out-of-band)
+ *
+ * For orphans we synthesise a minimal Media-shaped object so the
+ * existing UI grid + Lightbox keep working.
+ *
+ * Optional query params:
+ *   page, limit    — pagination (default page=1, limit=1000)
+ *   channelId      — filter by channelId (only meaningful for DB rows;
+ *                    orphans have unknown channelId)
+ *   status         — filter by status (DB rows only)
+ *   type           — 'photo' | 'video' | 'all' (default 'all'); uses
+ *                    extension to bucket
+ *
+ * Response: { media, total, pages, source: { fromDb, fromDisk, orphans } }
+ *   - `total` is the total number of rows after filtering, BEFORE pagination
+ *   - `pages` is ceil(total/limit)
+ *   - `source` is a per-source count for the UI to surface ("123 on disk
+ *     · 118 in DB · 5 orphans")
+ */
+exports.getMediaFromDisk = async (req, res) => {
+  try {
+    const { status, channelId, page = 1, limit = 1000, type = 'all' } = req.query;
+    const pageNum = Math.max(1, parseInt(page) || 1);
+    const limitNum = Math.min(5000, Math.max(1, parseInt(limit) || 300));
+    const downloadDir = path.join(__dirname, '..', 'media_downloads');
+
+    // Read every file on disk. If the directory doesn't exist yet
+    // (e.g. nothing has ever been downloaded) return an empty list.
+    let diskFiles = [];
+    if (fs.existsSync(downloadDir)) {
+      diskFiles = fs.readdirSync(downloadDir, { withFileTypes: true })
+        .filter((d) => d.isFile())
+        .map((d) => d.name);
+    }
+
+    // Bucket disk files by Media doc, so we can attach DB metadata when
+    // present and synthesise an orphan stub when not.
+    // Filename convention: `${channelId}_${telegramMessageId}${ext}` —
+    // see telegramService.js downloadAndMaybeUpload.
+    const fileNameToDb = new Map();
+    for (const fn of diskFiles) fileNameToDb.set(fn, null);
+
+    // Pull DB rows that match a known file on disk. We still pull all
+    // DB rows (within reason) so users can see "uploaded to group" or
+    // "failed" rows whose file is gone.
+    const dbQuery = {};
+    if (status) dbQuery.status = status;
+    if (channelId) dbQuery.channelId = channelId;
+    const dbRows = await Media.find(dbQuery).sort({ downloadedAt: -1 });
+    const dbByFileName = new Map();
+    for (const row of dbRows) {
+      if (row.fileName) dbByFileName.set(row.fileName, row);
+    }
+
+    // Build the unified list. Start with DB rows, then append any disk
+    // file that doesn't have a corresponding DB row (orphan).
+    const seenFileNames = new Set();
+    const rows = [];
+    let fromDb = 0;
+    let orphans = 0;
+
+    const matchesType = (fn) => {
+      if (type === 'all') return true;
+      const lower = (fn || '').toLowerCase();
+      const photoExts = /\.(jpe?g|png|gif|webp|avif|bmp)$/i;
+      const videoExts = /\.(mp4|webm|mov|m4v|mkv|3gp)$/i;
+      if (type === 'photo') return photoExts.test(lower);
+      if (type === 'video') return videoExts.test(lower);
+      return true;
+    };
+
+    for (const row of dbRows) {
+      if (row.fileName && !matchesType(row.fileName)) continue;
+      const obj = row.toObject ? row.toObject() : row;
+      obj.previewAvailable = !!(row.localPath && fs.existsSync(row.localPath));
+      obj.source = obj.previewAvailable ? 'db+disk' : 'db';
+      rows.push(obj);
+      if (row.fileName) seenFileNames.add(row.fileName);
+      fromDb += 1;
+    }
+
+    for (const fn of diskFiles) {
+      if (seenFileNames.has(fn)) continue;
+      if (!matchesType(fn)) continue;
+      const fullPath = path.join(downloadDir, fn);
+      let stats = null;
+      try { stats = fs.statSync(fullPath); } catch (_) { /* file vanished between readdir and stat */ continue; }
+      rows.push({
+        _id: `orphan-${fn}`,
+        fileName: fn,
+        localPath: fullPath,
+        caption: '(orphan file — no metadata on disk)',
+        status: 'orphan',
+        // Mtime doubles as a stand-in "downloadedAt" for sorting.
+        downloadedAt: stats.mtime,
+        fileSize: stats.size,
+        previewAvailable: true,
+        source: 'disk',
+        // Channel id is encoded in the filename `${channelId}_${msgId}${ext}`.
+        // Surface it so the channel filter still works.
+        channelId: (fn.split('_')[0] || ''),
+        telegramMessageId: Number((fn.match(/_(\d+)(?:\.[^.]+)?$/) || [])[1] || 0) || undefined,
+      });
+      orphans += 1;
+    }
+
+    // Sort by mtime/downloadedAt desc so the most recent is first.
+    rows.sort((a, b) => {
+      const aT = new Date(a.downloadedAt || 0).getTime();
+      const bT = new Date(b.downloadedAt || 0).getTime();
+      return bT - aT;
+    });
+
+    const total = rows.length;
+    const start = (pageNum - 1) * limitNum;
+    const pageRows = rows.slice(start, start + limitNum);
+
+    res.json({
+      media: pageRows,
+      total,
+      pages: Math.ceil(total / limitNum),
+      page: pageNum,
+      limit: limitNum,
+      source: { fromDb, fromDisk: diskFiles.length, orphans },
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
