@@ -198,3 +198,35 @@ exports.getMediaStats = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
+
+/**
+ * Distinct channels represented in the Media collection, with a
+ * friendly title and a count of files per channel. Powers the
+ * "filter by channel" dropdown in the Media Vault.
+ */
+exports.getMediaChannels = async (req, res) => {
+  try {
+    const stats = await Media.aggregate([
+      {
+        $group: {
+          _id: "$channelId",
+          count: { $sum: 1 },
+          // Keep a sample channelTitle so the dropdown can show a
+          // human label instead of a raw numeric id.
+          sampleTitle: { $first: "$channelTitle" },
+        },
+      },
+      { $sort: { count: -1 } },
+    ]);
+    const channels = stats
+      .filter((s) => s._id != null)
+      .map((s) => ({
+        id: String(s._id),
+        count: s.count,
+        title: s.sampleTitle || String(s._id),
+      }));
+    res.json({ channels });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};

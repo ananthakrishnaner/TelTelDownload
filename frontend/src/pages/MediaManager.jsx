@@ -33,6 +33,10 @@ export default function MediaManager() {
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
+  const [channelFilter, setChannelFilter] = useState('all');
+  const [mediaChannels, setMediaChannels] = useState([]);
+  const [syncChannels, setSyncChannels] = useState([]);  // populated for the picker modal
+  const [syncPickerOpen, setSyncPickerOpen] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState(null);
   const [forwardDrawer, setForwardDrawer] = useState({ open: false, target: '' });
   const [syncing, setSyncing] = useState(false);
@@ -42,14 +46,36 @@ export default function MediaManager() {
   const [totalCount, setTotalCount] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
 
-  // Auto-Sync Vault: kick off a group_pull against every joined channel.
-  // The backend returns the list of started jobIds; we surface them in
-  // ActiveJobs and let the user monitor/control there.
-  const syncAll = async () => {
-    if (syncing) return;
+  // Open the channel picker — list every joined channel, default all
+  // selected, let the user uncheck the ones they don't want to sync.
+  const openSyncPicker = async () => {
+    try {
+      const res = await api.get('/telegram/groups');
+      const ch = (res.data.groups || []).filter((g) => g.isGroup || g.isChannel);
+      setSyncChannels(ch.map((g) => ({
+        id: String(g.id),
+        title: g.title || String(g.id),
+        selected: true,
+      })));
+      setSyncPickerOpen(true);
+    } catch (err) {
+      toast.error('Failed to load channels', { description: err.message });
+    }
+  };
+
+  const runSync = async () => {
+    const selected = syncChannels.filter((c) => c.selected);
+    if (selected.length === 0) {
+      toast.info('Pick at least one channel');
+      return;
+    }
     try {
       setSyncing(true);
-      const res = await api.post('/telegram/sync-all', {});
+      setSyncPickerOpen(false);
+      const excludeGroupIds = syncChannels
+        .filter((c) => !c.selected)
+        .map((c) => c.id);
+      const res = await api.post('/telegram/sync-all', { excludeGroupIds });
       const { total } = res.data || {};
       toast.success(`Sync started · ${total} channel${total === 1 ? '' : 's'}`, {
         description: 'Watch ActiveJobs for live progress',
@@ -57,8 +83,6 @@ export default function MediaManager() {
     } catch (err) {
       toast.error('Auto Sync failed', { description: err.message });
     } finally {
-      // Even though the jobs run for a long time, the request itself
-      // returns immediately. Free the button after a brief moment.
       setTimeout(() => setSyncing(false), 1500);
     }
   };
@@ -84,6 +108,15 @@ export default function MediaManager() {
     }
   };
 
+  async function fetchMediaChannels() {
+    try {
+      const res = await api.get('/media/channels');
+      setMediaChannels(res.data.channels || []);
+    } catch (err) {
+      console.error('Failed to load media channels', err);
+    }
+  }
+
   async function fetchGroups() {
     try {
       const res = await api.get('/telegram/groups');
@@ -100,7 +133,9 @@ export default function MediaManager() {
       // Pull a large page so most users see their whole library in one
       // shot. The backend caps at `limit`; for very large libraries
       // the user can hit "Load more" at the bottom of the grid.
-      const res = await api.get('/media', { params: { page: 1, limit: 1000 } });
+      const params = { page: 1, limit: 1000 };
+      if (channelFilter !== 'all') params.channelId = channelFilter;
+      const res = await api.get('/media', { params });
       const incoming = res.data.media || [];
       setMedia(incoming);
       setHasMore((res.data.total || 0) > incoming.length);
@@ -135,9 +170,18 @@ export default function MediaManager() {
   useEffect(() => {
     /* eslint-disable react-hooks/set-state-in-effect */
     fetchMedia();
+    fetchMediaChannels();
     fetchGroups();
     /* eslint-enable react-hooks/set-state-in-effect */
   }, []);
+
+  // Refetch the page (resetting pagination) when the channel filter
+  // changes — the user expects the grid to swap wholesale.
+  useEffect(() => {
+    pageRef.current = 1;
+    fetchMedia();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [channelFilter]);
 
   const handleDelete = async (item) => {
     try {
@@ -247,10 +291,10 @@ export default function MediaManager() {
         actions={
           <div className="flex items-center gap-2">
             <button
-              onClick={syncAll}
+              onClick={openSyncPicker}
               disabled={syncing}
               className="flex items-center gap-2 px-3 py-2 text-xs font-mono uppercase tracking-widest text-slate-100 bg-sky-500/15 hover:bg-sky-500/25 ring-1 ring-sky-500/30 disabled:opacity-50 disabled:cursor-not-allowed rounded-md transition-colors"
-              title="Pull all new media from every joined channel/group"
+              title="Pick which channels to pull from"
             >
               <FiRefreshCw size={12} className={syncing ? 'animate-spin' : ''} />
               {syncing ? 'Syncing…' : 'Auto Sync Vault'}
@@ -275,6 +319,15 @@ export default function MediaManager() {
           total={media.length}
           close={() => setWipeStep(0)}
           runWipe={runWipe}
+        />
+      )}
+
+      {syncPickerOpen && (
+        <SyncChannelPicker
+          channels={syncChannels}
+          setChannels={setSyncChannels}
+          close={() => setSyncPickerOpen(false)}
+          runSync={runSync}
         />
       )}
 
@@ -310,6 +363,22 @@ export default function MediaManager() {
             </button>
           ))}
         </div>
+        {/* Channel filter — populated from GET /media/channels.
+         * The title comes from the first Media doc that referenced
+         * the channel, which is a friendly approximation. */}
+        <select
+          value={channelFilter}
+          onChange={(e) => setChannelFilter(e.target.value)}
+          className="px-3 py-1.5 text-xs surface-1 rounded-md text-slate-200 border border-[var(--color-hairline)] focus:outline-none focus:border-sky-500/50 min-w-0 max-w-[14rem]"
+          title="Filter by channel"
+        >
+          <option value="all">All channels ({mediaChannels.reduce((n, c) => n + c.count, 0).toLocaleString()})</option>
+          {mediaChannels.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.title.length > 28 ? c.title.slice(0, 28) + '…' : c.title} ({c.count.toLocaleString()})
+            </option>
+          ))}
+        </select>
         <div className="relative flex-1 min-w-0">
           <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={14} />
           <input
@@ -606,6 +675,93 @@ function WipeAllModal({ step, setStep, total, close, runWipe }) {
             </div>
           </>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// SyncChannelPicker
+// Multi-select checklist of joined channels. The user can deselect the
+// ones they don't want to sync, and POST /telegram/sync-all is called
+// with an `excludeGroupIds` list of the unchecked ones.
+// ---------------------------------------------------------------------------
+function SyncChannelPicker({ channels, setChannels, close, runSync }) {
+  const allSelected = channels.every((c) => c.selected);
+  const noneSelected = channels.every((c) => !c.selected);
+  const selectedCount = channels.filter((c) => c.selected).length;
+  const toggle = (id) =>
+    setChannels((prev) => prev.map((c) => (c.id === id ? { ...c, selected: !c.selected } : c)));
+  const toggleAll = () =>
+    setChannels((prev) => prev.map((c) => ({ ...c, selected: !allSelected })));
+  const [filter, setFilter] = useState('');
+  const visible = filter.trim()
+    ? channels.filter((c) => c.title.toLowerCase().includes(filter.toLowerCase()))
+    : channels;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm" role="dialog" aria-modal="true">
+      <div className="surface-1 rounded-lg w-full max-w-xl p-6 ring-1 ring-sky-500/30 shadow-2xl flex flex-col max-h-[80vh]">
+        <div className="flex items-center gap-2 mb-4">
+          <FiRefreshCw className="text-sky-400" size={18} />
+          <h2 className="text-lg font-display text-slate-100">Pick channels to sync</h2>
+        </div>
+        <p className="text-xs text-slate-400 mb-3">
+          The backend will fire a <code className="text-slate-300">group_pull</code> job against
+          each selected channel. Watch <span className="text-sky-300">ActiveJobs</span> for live progress.
+        </p>
+
+        <div className="flex items-center gap-2 mb-3">
+          <input
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder="Filter channels…"
+            className="flex-1 px-3 py-1.5 text-sm bg-black/30 border border-[var(--color-hairline)] rounded font-mono text-slate-200 focus:border-sky-500/50 focus:outline-none"
+          />
+          <button
+            onClick={toggleAll}
+            className="px-3 py-1.5 text-xs font-mono uppercase tracking-widest text-slate-300 hover:text-slate-100 border border-[var(--color-hairline)] rounded"
+          >
+            {allSelected ? 'None' : 'All'}
+          </button>
+        </div>
+
+        <ul className="flex-1 overflow-y-auto surface-2 rounded-md p-2 min-h-0">
+          {visible.length === 0 && (
+            <p className="text-xs text-slate-500 text-center py-6">No channels match.</p>
+          )}
+          {visible.map((c) => (
+            <li key={c.id}>
+              <label className="flex items-center gap-3 px-2 py-1.5 rounded hover:bg-white/5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={c.selected}
+                  onChange={() => toggle(c.id)}
+                  className="accent-sky-500"
+                />
+                <span className="text-sm text-slate-200 truncate">{c.title}</span>
+                <span className="text-[10px] font-mono text-slate-500 ml-auto">{c.id}</span>
+              </label>
+            </li>
+          ))}
+        </ul>
+
+        <div className="flex items-center justify-between mt-4">
+          <p className="text-[10px] font-mono text-slate-500 tnum">
+            {selectedCount} of {channels.length} selected
+          </p>
+          <div className="flex gap-2">
+            <button onClick={close} className="px-4 py-2 text-xs font-mono uppercase tracking-widest text-slate-300 hover:text-slate-100">
+              Cancel
+            </button>
+            <button
+              onClick={runSync}
+              disabled={noneSelected}
+              className="px-4 py-2 text-xs font-mono uppercase tracking-widest text-white bg-sky-600 hover:bg-sky-500 ring-1 ring-sky-400 disabled:opacity-40 disabled:cursor-not-allowed rounded-md"
+            >
+              Start sync
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );
