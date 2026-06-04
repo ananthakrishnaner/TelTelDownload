@@ -5,6 +5,17 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      tag_override:
+        description: 'Override image tag (default: short SHA of the running commit). Leave empty to use the workflow run commit.'
+        required: false
+        default: ''
+        type: string
+      reason:
+        description: 'Why are you triggering this manually? (logged)'
+        required: false
+        default: 'manual run'
+        type: string
 
 # Required for ghcr.io push from the `build` job.
 permissions:
@@ -46,7 +57,20 @@ jobs:
 
       - name: Resolve trigger
         id: trigger
-        run: echo "name=$([ \"${{ github.event_name }}\" = 'workflow_dispatch' ] && echo 'manual (workflow_dispatch)' || echo 'push to main')" >> "$GITHUB_OUTPUT"
+        run: |
+          REASON='${{ inputs.reason || '' }}'
+          if [ "${{ github.event_name }}" = 'workflow_dispatch' ]; then
+            echo "name=manual (workflow_dispatch) — ${REASON}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=push to main" >> "$GITHUB_OUTPUT"
+          fi
+          # If the operator passed a tag override, use it; otherwise
+          # we'll use the commit SHA in the meta step.
+          if [ -n '${{ inputs.tag_override }}' ]; then
+            echo "override=${{ inputs.tag_override }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "override=" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
@@ -66,6 +90,7 @@ jobs:
           tags: |
             type=sha,prefix=
             type=raw,value=latest
+            ${{ steps.trigger.outputs.override && format('type=raw,value={0}', steps.trigger.outputs.override) || '' }}
           flavor: latest=auto
 
       - name: Compute frontend metadata
@@ -76,6 +101,7 @@ jobs:
           tags: |
             type=sha,prefix=
             type=raw,value=latest
+            ${{ steps.trigger.outputs.override && format('type=raw,value={0}', steps.trigger.outputs.override) || '' }}
           flavor: latest=auto
 
       - name: Build & push backend
