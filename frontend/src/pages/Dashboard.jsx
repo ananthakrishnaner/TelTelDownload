@@ -102,6 +102,18 @@ export default function Dashboard() {
         }, 3000);
       }
     });
+    // job_done is the authoritative "this job is no longer live"
+    // signal. The legacy 'job_progress >= total' heuristic misses
+    // aborted jobs, so the previous version of this component left
+    // stopped jobs hanging in the UI as if they were still running.
+    socketRef.current.on('job_done', (data) => {
+      if (!data) return;
+      setJobProgress((prev) => {
+        const next = { ...prev };
+        delete next[data.jobId];
+        return next;
+      });
+    });
     return () => {
       socketRef.current?.disconnect();
     };

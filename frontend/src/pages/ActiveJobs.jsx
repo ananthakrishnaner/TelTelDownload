@@ -3,7 +3,7 @@ import { io } from 'socket.io-client';
 import {
   FiActivity, FiRefreshCw, FiAlertTriangle, FiClock, FiCpu,
   FiLink, FiPause, FiXCircle, FiDownload, FiUpload,
-  FiCheckCircle, FiZap,
+  FiCheckCircle, FiZap, FiSlash,
 } from 'react-icons/fi';
 import api from '../services/api';
 import { toast } from '../hooks/useToast';
@@ -224,6 +224,22 @@ export default function ActiveJobs() {
     }
   };
 
+  // Kill All — stop every running job in one call. The backend
+  // fires AbortController.abort() on each job, so the in-flight
+  // download loops unwind on their own and emit job_done with
+  // status: 'aborted', which we already listen for below.
+  const killAll = async () => {
+    if (jobs.length === 0) return;
+    if (!window.confirm(`Kill all ${jobs.length} running job(s)? This cannot be undone.`)) return;
+    try {
+      const res = await api.post('/telegram/stop-all-jobs');
+      const stopped = res.data?.jobIds?.length || 0;
+      toast.warning(`Killed ${stopped} job(s)`);
+    } catch (err) {
+      toast.error('Kill All failed', { description: err.message });
+    }
+  };
+
   const toggleExpand = (id) => {
     setExpanded((prev) => {
       const n = new Set(prev);
@@ -253,13 +269,25 @@ export default function ActiveJobs() {
         description="Real-time throughput, current files, and live activity log for every running transfer."
         accent="jobs"
         actions={
-          <button
-            onClick={fetchJobs}
-            className="flex items-center gap-2 px-3 py-2 text-xs font-mono uppercase tracking-widest text-slate-400 hover:text-slate-100 border border-[var(--color-hairline)] rounded-md"
-          >
-            <FiRefreshCw size={12} className={loading ? 'animate-spin' : ''} />
-            Refresh
-          </button>
+          <div className="flex items-center gap-2">
+            {jobs.length > 0 && (
+              <button
+                onClick={killAll}
+                className="flex items-center gap-2 px-3 py-2 text-xs font-mono uppercase tracking-widest text-rose-200 bg-rose-500/10 hover:bg-rose-500/20 ring-1 ring-rose-500/30 rounded-md"
+                title="Stop every running job"
+              >
+                <FiSlash size={12} />
+                Kill All
+              </button>
+            )}
+            <button
+              onClick={fetchJobs}
+              className="flex items-center gap-2 px-3 py-2 text-xs font-mono uppercase tracking-widest text-slate-400 hover:text-slate-100 border border-[var(--color-hairline)] rounded-md"
+            >
+              <FiRefreshCw size={12} className={loading ? 'animate-spin' : ''} />
+              Refresh
+            </button>
+          </div>
         }
       />
 
@@ -432,8 +460,138 @@ export default function ActiveJobs() {
           })}
         </div>
       )}
+
+      {/* Past jobs (JobHistory) — last 50 finished/aborted jobs.
+       * Pulled from GET /telegram/job-history on mount + every 30s. */}
+      <PastJobs />
     </div>
   );
+}
+
+function PastJobs() {
+  const [history, setHistory] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const fetchHistory = useCallback(async () => {
+    try {
+      const res = await api.get('/telegram/job-history');
+      setHistory(res.data.history || []);
+    } catch (err) {
+      // soft-fail — the page still works without history
+      console.error('Failed to load job history', err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchHistory(); /* eslint-disable-line react-hooks/set-state-in-effect */
+    const id = setInterval(fetchHistory, 30_000);
+    return () => clearInterval(id);
+  }, [fetchHistory]);
+
+  if (loading && history.length === 0) {
+    return (
+      <section className="mt-10">
+        <h2 className="text-[10px] font-mono uppercase tracking-widest text-slate-500 mb-3">
+          Past Jobs
+        </h2>
+        <Skeleton className="h-20 w-full" />
+      </section>
+    );
+  }
+  if (history.length === 0) {
+    return (
+      <section className="mt-10">
+        <h2 className="text-[10px] font-mono uppercase tracking-widest text-slate-500 mb-3">
+          Past Jobs
+        </h2>
+        <p className="text-xs text-slate-500 font-mono">No completed jobs yet.</p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="mt-10">
+      <div className="flex items-baseline justify-between mb-3">
+        <h2 className="text-[10px] font-mono uppercase tracking-widest text-slate-500">
+          Past Jobs · {history.length} most recent
+        </h2>
+        <p className="text-[10px] font-mono text-slate-500">refreshes every 30s</p>
+      </div>
+      <div className="surface-1 rounded-lg overflow-hidden">
+        <table className="w-full text-xs font-mono">
+          <thead className="bg-white/[0.02] text-slate-500 text-[10px] uppercase tracking-widest">
+            <tr>
+              <th className="text-left px-3 py-2">Status</th>
+              <th className="text-left px-3 py-2">Type</th>
+              <th className="text-left px-3 py-2">Group</th>
+              <th className="text-right px-3 py-2">Progress</th>
+              <th className="text-right px-3 py-2">Failed</th>
+              <th className="text-right px-3 py-2">Skipped</th>
+              <th className="text-right px-3 py-2">Started</th>
+              <th className="text-right px-3 py-2">Duration</th>
+              <th className="text-left px-3 py-2">Job ID</th>
+            </tr>
+          </thead>
+          <tbody>
+            {history.map((h) => (
+              <tr key={h.jobId} className="border-t border-[var(--color-hairline)] hover:bg-white/[0.02]">
+                <td className="px-3 py-2">
+                  <span className={statusColor(h.status)}>{statusLabel(h.status)}</span>
+                </td>
+                <td className="px-3 py-2 text-slate-300">
+                  {h.type === 'bulk_upload' ? 'Upload' : 'Download'}
+                </td>
+                <td className="px-3 py-2 text-slate-400">{h.groupId || '—'}</td>
+                <td className="px-3 py-2 text-right text-slate-200 tnum">
+                  {(h.progress || 0).toLocaleString()} / {(h.total || 0).toLocaleString()}
+                </td>
+                <td className={`px-3 py-2 text-right tnum ${(h.failed || 0) > 0 ? 'text-rose-300' : 'text-slate-500'}`}>
+                  {h.failed || 0}
+                </td>
+                <td className={`px-3 py-2 text-right tnum ${(h.skipped || 0) > 0 ? 'text-amber-300' : 'text-slate-500'}`}>
+                  {h.skipped || 0}
+                </td>
+                <td className="px-3 py-2 text-right text-slate-400">
+                  {h.startedAt ? new Date(h.startedAt).toLocaleString() : '—'}
+                </td>
+                <td className="px-3 py-2 text-right text-slate-400 tnum">
+                  {h.startedAt && h.completedAt
+                    ? formatDuration(h.completedAt - h.startedAt)
+                    : '—'}
+                </td>
+                <td className="px-3 py-2 text-slate-500">{h.jobId?.slice(0, 8) || '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function statusLabel(s) {
+  if (s === 'completed') return '✓ done';
+  if (s === 'aborted')   return '■ stopped';
+  if (s === 'partial')   return '! partial';
+  return s || '—';
+}
+function statusColor(s) {
+  if (s === 'completed') return 'text-emerald-300';
+  if (s === 'aborted')   return 'text-rose-300';
+  if (s === 'partial')   return 'text-amber-300';
+  return 'text-slate-400';
+}
+function formatDuration(ms) {
+  if (ms < 1000) return `${ms}ms`;
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  if (m < 60) return `${m}m ${r}s`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${m % 60}m`;
 }
 
 function ActivityLog({ entries }) {

@@ -96,6 +96,19 @@ exports.stopJob = (req, res) => {
   }
 };
 
+exports.stopAllJobs = (req, res) => {
+  try {
+    const stopped = telegramService.stopAllJobs();
+    res.json({
+      success: true,
+      message: `Killed ${stopped.length} job(s)`,
+      jobIds: stopped,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
 exports.triggerDownload = async (req, res) => {
   try {
     const { groupId, targetGroupId, taskId } = req.body;

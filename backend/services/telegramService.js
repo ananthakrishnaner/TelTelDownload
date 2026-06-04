@@ -16,6 +16,18 @@ const { v4: uuidv4 } = require('uuid');
 const sessionManager = require('./sessionManager');
 const progressEmitter = require('../utils/progressEmitter');
 const { retryWithBackoff } = require('../utils/retry');
+const { createLimiter } = require('../utils/concurrency');
+
+// Outer-loop concurrency: how many messages we download in parallel.
+// Telegram's rate limits on `messages.getMedia` and the part-fetch
+// endpoints comfortably allow 3 concurrent in-flight file downloads
+// per account. 5 is a good "feels fast without getting banned"
+// number; 1 is the historical default and the reason downloads
+// crawled. Override per-job via the env var GROUP_PULL_CONCURRENCY.
+const GROUP_PULL_CONCURRENCY = Math.max(
+  1,
+  parseInt(process.env.GROUP_PULL_CONCURRENCY || '5', 10) || 5,
+);
 const logActivity = require('../utils/logger');
 
 // Build a t.me/c/<group>/<msg> deep-link for any (groupId, msgId).
@@ -63,6 +75,21 @@ exports.getActiveJobs = () => progressEmitter.snapshotForIds();
 exports.stopJob = (jobId) => {
   const res = progressEmitter.stopJob(jobId, { reason: 'user_request' });
   return !!res.ok;
+};
+
+/**
+ * Kill every currently running job. Returns the list of jobIds that
+ * had a stop signal fired on them. Used by the "Kill All" button in
+ * the ActiveJobs page.
+ */
+exports.stopAllJobs = () => {
+  const snapshot = progressEmitter.snapshotForIds();
+  const stopped = [];
+  for (const job of snapshot) {
+    const r = progressEmitter.stopJob(job.id, { reason: 'kill_all' });
+    if (r.ok) stopped.push(job.id);
+  }
+  return stopped;
 };
 
 exports.getJobLog = (jobId, opts) => progressEmitter.getLog(jobId, opts);
@@ -176,9 +203,15 @@ async function downloadAndMaybeUpload({ client, jobId, groupId, message, targetG
   try {
     if (!existing || !fs.existsSync(filePath)) {
       progressEmitter.byteProgress({ jobId, groupId, msgId, fileName, type: 'download', current: 0, total: 1 });
+      // `workers` is the per-message multipart fetch parallelism in
+      // gramme.js — it spawns N parallel HTTP requests to download
+      // different chunks of the same file. 4 is a safe default that
+      // gives ~3-4× single-file throughput on most Telegram CDNs
+      // without tripping rate limits. (The outer loop's concurrency
+      // is controlled by the groupPullLimit in the caller.)
       const buffer = await retryWithBackoff(
         () => client.downloadMedia(message, {
-          workers: 1,
+          workers: 4,
           progressCallback: (downloaded, total) => {
             progressEmitter.byteProgress({ jobId, groupId, msgId, fileName, type: 'download', current: downloaded, total });
           },
@@ -268,19 +301,64 @@ async function downloadMediaForGroup(groupId, targetGroupId = null, { taskId = n
   });
   progressEmitter.log(jobId, 'info', `Starting group pull: ${validMessages.length} candidates in ${groupId}`);
 
+  // Concurrent outer loop. Instead of awaiting each message in turn
+  // (1 file at a time), we hand them to a small worker pool of
+  // size GROUP_PULL_CONCURRENCY. Combined with `workers: 4` on
+  // downloadMedia (the per-message multipart fetch parallelism),
+  // this turns a 1-file-at-a-time crawl into a 5×4=20-way parallel
+  // download — well under Telegram's per-account rate limits.
+  //
+  // We collect every result and tally the downloaded count at the
+  // end so the progress emitter is still driven by fileCompleted /
+  // fileSkipped / fileFailed inside downloadAndMaybeUpload.
+  progressEmitter.log(jobId, 'info',
+    `Concurrency: ${GROUP_PULL_CONCURRENCY} message(s) in parallel × 4 part-workers each`);
+
+  const limit = createLimiter(GROUP_PULL_CONCURRENCY, abortController.signal);
   let downloadedCount = 0;
-  for (const message of validMessages) {
-    if (abortController.signal.aborted) break;
-    const result = await downloadAndMaybeUpload({
-      client, jobId, groupId, message, targetGroupId,
-      downloadDir, abortSignal: abortController.signal,
-      onRetry: ({ attempt, waitMs, reason }) => {
-        logActivity('Retry', { jobId, msgId: message.id, attempt, waitMs, reason }, 'warning');
-        progressEmitter.log(jobId, 'warning',
-          `Retry ${attempt} for msg ${message.id} in ${waitMs}ms (${reason})`);
-      },
-    });
-    if (!result.skipped) downloadedCount += 1;
+  let skippedCount = 0;
+  let failedCount = 0;
+
+  const tasks = validMessages.map((message) => limit(async ({ signal }) => {
+    if (signal.aborted) return { skipped: true };
+    try {
+      const result = await downloadAndMaybeUpload({
+        client, jobId, groupId, message, targetGroupId,
+        downloadDir, abortSignal: signal,
+        onRetry: ({ attempt, waitMs, reason }) => {
+          logActivity('Retry', { jobId, msgId: message.id, attempt, waitMs, reason }, 'warning');
+          progressEmitter.log(jobId, 'warning',
+            `Retry ${attempt} for msg ${message.id} in ${waitMs}ms (${reason})`);
+        },
+      });
+      if (result.skipped) skippedCount += 1;
+      else if (result.error) failedCount += 1;
+      else downloadedCount += 1;
+      return result;
+    } catch (err) {
+      // Per-message failures shouldn't kill the whole batch.
+      failedCount += 1;
+      progressEmitter.fileFailed(jobId, {
+        groupId, msgId: message.id, fileName: null, reason: err.message,
+      });
+      progressEmitter.log(jobId, 'error', `Failed msg ${message.id}: ${err.message}`);
+      logActivity('Download failed', { jobId, msgId: message.id, reason: err.message }, 'error');
+      return { error: err };
+    }
+  }));
+
+  // Wait for everything to settle. limit.drain resolves once every
+  // queued + in-flight task is finished (or aborted).
+  await Promise.all(tasks);
+
+  progressEmitter.log(jobId, 'info',
+    `Group pull finished: ${downloadedCount} new, ${skippedCount} skipped, ${failedCount} failed`);
+  // Stash the final counts on the job so finishJob can read them
+  // even after the worker has cleared references.
+  const job = progressEmitter.getRaw(jobId);
+  if (job) {
+    job.failed = (job.failed || 0) + failedCount;
+    job.skipped = (job.skipped || 0) + skippedCount;
   }
 
   await finishJob(jobId, { type: 'group_pull', groupId, total: validMessages.length });
@@ -303,15 +381,40 @@ async function downloadSpecificMedia(groupId, messageIds, targetGroupId = null, 
   });
   progressEmitter.log(jobId, 'info', `Selective pull: ${messages.length} ids from ${groupId}`);
 
+  // Concurrent outer loop (see downloadMediaForGroup for rationale).
+  const limit = createLimiter(GROUP_PULL_CONCURRENCY, abortController.signal);
   let downloadedCount = 0;
-  for (const message of messages) {
-    if (abortController.signal.aborted) break;
-    if (!message || !message.media) continue;
-    const result = await downloadAndMaybeUpload({
-      client, jobId, groupId, message, targetGroupId,
-      downloadDir, abortSignal: abortController.signal,
-    });
-    if (!result.skipped) downloadedCount += 1;
+  let skippedCount = 0;
+  let failedCount = 0;
+
+  const tasks = messages
+    .filter((m) => m && m.media)
+    .map((message) => limit(async ({ signal }) => {
+      if (signal.aborted) return { skipped: true };
+      try {
+        const result = await downloadAndMaybeUpload({
+          client, jobId, groupId, message, targetGroupId,
+          downloadDir, abortSignal: signal,
+        });
+        if (result.skipped) skippedCount += 1;
+        else if (result.error) failedCount += 1;
+        else downloadedCount += 1;
+        return result;
+      } catch (err) {
+        failedCount += 1;
+        progressEmitter.fileFailed(jobId, {
+          groupId, msgId: message.id, fileName: null, reason: err.message,
+        });
+        progressEmitter.log(jobId, 'error', `Failed msg ${message.id}: ${err.message}`);
+        return { error: err };
+      }
+    }));
+  await Promise.all(tasks);
+
+  const job = progressEmitter.getRaw(jobId);
+  if (job) {
+    job.failed = (job.failed || 0) + failedCount;
+    job.skipped = (job.skipped || 0) + skippedCount;
   }
 
   await finishJob(jobId, { type: 'specific_pull', groupId, total: messages.length });

@@ -10,6 +10,9 @@ router.get('/group-media/:id', telegramController.getGroupMedia);
 router.get('/active-jobs', telegramController.getActiveJobs);
 router.get('/job-history', telegramController.getJobHistory);
 router.post('/stop-job/:id', telegramController.stopJob);
+// Alias for older clients (Dashboard.jsx and external scripts).
+router.post('/abort-job/:id', telegramController.stopJob);
+router.post('/stop-all-jobs', telegramController.stopAllJobs);
 router.post('/download', telegramController.triggerDownload);
 router.post('/download-specific', telegramController.downloadSpecific);
 router.post('/sync-all', telegramController.syncAllMedia);

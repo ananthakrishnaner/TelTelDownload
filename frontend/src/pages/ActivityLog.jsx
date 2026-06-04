@@ -62,7 +62,7 @@ export default function ActivityLog() {
     <div className="p-6 md:p-10 max-w-[1400px] mx-auto pb-32 md:pb-12">
       <PageHeader
         eyebrow="Audit"
-        title="System Ledger"
+        title="System Activity Log"
         description="Chronological history of every automated action in the system."
         accent="logs"
       />

@@ -1,5 +1,5 @@
-import { useState, useEffect, useMemo } from 'react';
-import { FiImage, FiVideo, FiSearch, FiCheck, FiAlertTriangle, FiRefreshCw } from 'react-icons/fi';
+import { useState, useEffect, useMemo, useRef } from 'react';
+import { FiImage, FiVideo, FiSearch, FiCheck, FiAlertTriangle, FiRefreshCw, FiTrash2 } from 'react-icons/fi';
 import api from '../services/api';
 import { toast } from '../hooks/useToast';
 import PageHeader from '../components/PageHeader';
@@ -36,6 +36,11 @@ export default function MediaManager() {
   const [lightboxIndex, setLightboxIndex] = useState(null);
   const [forwardDrawer, setForwardDrawer] = useState({ open: false, target: '' });
   const [syncing, setSyncing] = useState(false);
+  const [wipeStep, setWipeStep] = useState(0);  // 0=closed, 1/2/3=modal steps
+  const [wiping, setWiping] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
+  const [totalCount, setTotalCount] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   // Auto-Sync Vault: kick off a group_pull against every joined channel.
   // The backend returns the list of started jobIds; we surface them in
@@ -58,6 +63,27 @@ export default function MediaManager() {
     }
   };
 
+  // Wipe All — 3-step confirmation. step 0 = closed, 1 → 2 → 3.
+  const openWipeAll = () => setWipeStep(1);
+  const runWipe = async () => {
+    if (wiping) return;
+    try {
+      setWiping(true);
+      const res = await api.post('/media/wipe-all', { confirm: 'WIPE_ALL' });
+      const { deleted } = res.data || {};
+      toast.warning(`Wiped ${deleted.docs} item${deleted.docs === 1 ? '' : 's'}`, {
+        description: `Files removed from disk: ${deleted.files} (${deleted.filesMissing} were already gone)`,
+      });
+      setWipeStep(0);
+      setSelected([]);
+      fetchMedia();
+    } catch (err) {
+      toast.error('Wipe failed', { description: err.message });
+    } finally {
+      setWiping(false);
+    }
+  };
+
   async function fetchGroups() {
     try {
       const res = await api.get('/telegram/groups');
@@ -71,8 +97,14 @@ export default function MediaManager() {
   async function fetchMedia() {
     try {
       setLoading(true);
-      const res = await api.get('/media');
-      setMedia(res.data.media || []);
+      // Pull a large page so most users see their whole library in one
+      // shot. The backend caps at `limit`; for very large libraries
+      // the user can hit "Load more" at the bottom of the grid.
+      const res = await api.get('/media', { params: { page: 1, limit: 1000 } });
+      const incoming = res.data.media || [];
+      setMedia(incoming);
+      setHasMore((res.data.total || 0) > incoming.length);
+      setTotalCount(res.data.total || incoming.length);
     } catch (err) {
       toast.error('Failed to load media', { description: err.message });
     } finally {
@@ -80,10 +112,31 @@ export default function MediaManager() {
     }
   }
 
+  // Load the next page and append. Tracks the current page in a ref
+  // so we don't need extra state for it.
+  const pageRef = useRef(1);
+  const loadMore = async () => {
+    if (loadingMore || !hasMore) return;
+    try {
+      setLoadingMore(true);
+      const next = pageRef.current + 1;
+      const res = await api.get('/media', { params: { page: next, limit: 1000 } });
+      const incoming = res.data.media || [];
+      pageRef.current = next;
+      setMedia((prev) => [...prev, ...incoming]);
+      setHasMore(media.length + incoming.length < (res.data.total || 0));
+    } catch (err) {
+      toast.error('Load more failed', { description: err.message });
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+    /* eslint-disable react-hooks/set-state-in-effect */
     fetchMedia();
     fetchGroups();
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, []);
 
   const handleDelete = async (item) => {
@@ -192,17 +245,38 @@ export default function MediaManager() {
         description={`${media.length} item${media.length === 1 ? '' : 's'} downloaded · stored locally at ./media_downloads`}
         accent="media"
         actions={
-          <button
-            onClick={syncAll}
-            disabled={syncing}
-            className="flex items-center gap-2 px-3 py-2 text-xs font-mono uppercase tracking-widest text-slate-100 bg-sky-500/15 hover:bg-sky-500/25 ring-1 ring-sky-500/30 disabled:opacity-50 disabled:cursor-not-allowed rounded-md transition-colors"
-            title="Pull all new media from every joined channel/group"
-          >
-            <FiRefreshCw size={12} className={syncing ? 'animate-spin' : ''} />
-            {syncing ? 'Syncing…' : 'Auto Sync Vault'}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={syncAll}
+              disabled={syncing}
+              className="flex items-center gap-2 px-3 py-2 text-xs font-mono uppercase tracking-widest text-slate-100 bg-sky-500/15 hover:bg-sky-500/25 ring-1 ring-sky-500/30 disabled:opacity-50 disabled:cursor-not-allowed rounded-md transition-colors"
+              title="Pull all new media from every joined channel/group"
+            >
+              <FiRefreshCw size={12} className={syncing ? 'animate-spin' : ''} />
+              {syncing ? 'Syncing…' : 'Auto Sync Vault'}
+            </button>
+            <button
+              onClick={openWipeAll}
+              disabled={media.length === 0 || wiping}
+              className="flex items-center gap-2 px-3 py-2 text-xs font-mono uppercase tracking-widest text-rose-200 bg-rose-500/10 hover:bg-rose-500/20 ring-1 ring-rose-500/30 disabled:opacity-50 disabled:cursor-not-allowed rounded-md transition-colors"
+              title="Delete every Media document and unlink every file on disk"
+            >
+              <FiTrash2 size={12} />
+              Wipe All
+            </button>
+          </div>
         }
       />
+
+      {wipeStep > 0 && (
+        <WipeAllModal
+          step={wipeStep}
+          setStep={setWipeStep}
+          total={media.length}
+          close={() => setWipeStep(0)}
+          runWipe={runWipe}
+        />
+      )}
 
       {/* Filter bar */}
       <div className="flex flex-col md:flex-row md:items-center gap-3 mb-5">
@@ -353,6 +427,22 @@ export default function MediaManager() {
         </div>
       )}
 
+      {/* Pagination footer — shown when more rows exist on the server */}
+      {hasMore && (
+        <div className="mt-6 flex items-center justify-center gap-3">
+          <p className="text-[10px] font-mono text-slate-500 tnum">
+            showing {media.length.toLocaleString()} of {totalCount.toLocaleString()}
+          </p>
+          <button
+            onClick={loadMore}
+            disabled={loadingMore}
+            className="px-3 py-1.5 text-xs font-mono uppercase tracking-widest text-slate-200 bg-white/5 hover:bg-white/10 ring-1 ring-[var(--color-hairline)] disabled:opacity-50 disabled:cursor-not-allowed rounded-md"
+          >
+            {loadingMore ? 'Loading…' : 'Load more'}
+          </button>
+        </div>
+      )}
+
       {/* Lightbox */}
       {lightboxIndex !== null && (
         <Lightbox
@@ -415,6 +505,108 @@ export default function MediaManager() {
         onDelete={handleBulkDelete}
         onClear={() => setSelected([])}
       />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// WipeAllModal
+// 3-step confirmation. Step 1: read the warning. Step 2: type the
+// literal string "WIPE" into a text input to prove the operator
+// understands. Step 3: press the final red button.
+// ---------------------------------------------------------------------------
+function WipeAllModal({ step, setStep, total, close, runWipe }) {
+  const [typed, setTyped] = useState('');
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm" role="dialog" aria-modal="true">
+      <div className="surface-1 rounded-lg w-full max-w-lg p-6 ring-1 ring-rose-500/30 shadow-2xl">
+        <div className="flex items-center gap-2 mb-4">
+          <FiAlertTriangle className="text-rose-400" size={18} />
+          <h2 className="text-lg font-display text-slate-100">Wipe All Media</h2>
+        </div>
+
+        <ol className="flex items-stretch w-full mb-5">
+          {['Read', 'Confirm', 'Wipe'].map((label, i) => (
+            <li key={label} className="flex-1 flex items-stretch min-w-0">
+              <div className="flex flex-col items-center text-center px-2 flex-1">
+                <div
+                  className={`w-9 h-9 rounded-full flex items-center justify-center text-xs font-mono font-semibold transition-all duration-300 border ${
+                    i < step
+                      ? 'bg-rose-500/15 border-rose-500/40 text-rose-300'
+                      : i === step
+                      ? 'bg-rose-500/10 border-rose-500 text-rose-300 shadow-[0_0_0_4px_rgba(244,63,94,0.10)]'
+                      : 'bg-transparent border-white/10 text-slate-500'
+                  }`}
+                >
+                  {i < step ? '✓' : String(i + 1).padStart(2, '0')}
+                </div>
+                <p className={`mt-2 text-[10px] font-mono uppercase tracking-widest ${i <= step ? 'text-rose-300' : 'text-slate-500'}`}>
+                  {label}
+                </p>
+              </div>
+            </li>
+          ))}
+        </ol>
+
+        {step === 1 && (
+          <>
+            <p className="text-sm text-slate-300 mb-4">
+              This will <span className="text-rose-300 font-semibold">permanently delete</span> every Media document and unlink every downloaded file on disk.
+            </p>
+            <ul className="text-xs text-slate-400 space-y-1 mb-5 list-disc list-inside">
+              <li><span className="font-mono text-rose-300">{total.toLocaleString()}</span> Media documents will be dropped from Mongo</li>
+              <li>All files in <span className="font-mono text-slate-300">./media_downloads</span> will be unlinked</li>
+              <li>This action cannot be undone. Re-downloading everything will take a long time.</li>
+            </ul>
+            <div className="flex justify-end gap-2">
+              <button onClick={close} className="px-4 py-2 text-xs font-mono uppercase tracking-widest text-slate-300 hover:text-slate-100">Cancel</button>
+              <button onClick={() => setStep(2)} className="px-4 py-2 text-xs font-mono uppercase tracking-widest text-rose-200 bg-rose-500/20 hover:bg-rose-500/30 ring-1 ring-rose-500/30 rounded-md">Continue</button>
+            </div>
+          </>
+        )}
+
+        {step === 2 && (
+          <>
+            <p className="text-sm text-slate-300 mb-3">
+              Type <span className="font-mono text-rose-300 bg-rose-500/10 px-1.5 py-0.5 rounded">WIPE</span> to confirm.
+            </p>
+            <input
+              autoFocus
+              value={typed}
+              onChange={(e) => setTyped(e.target.value.toUpperCase())}
+              placeholder="Type WIPE"
+              className="w-full px-3 py-2 mb-5 bg-black/30 border border-[var(--color-hairline)] rounded font-mono text-slate-200 focus:border-rose-500/50 focus:outline-none"
+            />
+            <div className="flex justify-end gap-2">
+              <button onClick={close} className="px-4 py-2 text-xs font-mono uppercase tracking-widest text-slate-300 hover:text-slate-100">Cancel</button>
+              <button
+                onClick={() => setStep(3)}
+                disabled={typed !== 'WIPE'}
+                className="px-4 py-2 text-xs font-mono uppercase tracking-widest text-rose-200 bg-rose-500/20 hover:bg-rose-500/30 ring-1 ring-rose-500/30 disabled:opacity-40 disabled:cursor-not-allowed rounded-md"
+              >
+                I understand · continue
+              </button>
+            </div>
+          </>
+        )}
+
+        {step === 3 && (
+          <>
+            <p className="text-sm text-slate-300 mb-5">
+              Final step. Press the button below to wipe <span className="font-mono text-rose-300">{total.toLocaleString()}</span> item{total === 1 ? '' : 's'} and unlink their files.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button onClick={close} className="px-4 py-2 text-xs font-mono uppercase tracking-widest text-slate-300 hover:text-slate-100">Cancel</button>
+              <button
+                onClick={runWipe}
+                className="px-4 py-2 text-xs font-mono uppercase tracking-widest text-white bg-rose-600 hover:bg-rose-500 ring-1 ring-rose-400 rounded-md shadow-[0_0_24px_rgba(244,63,94,0.4)]"
+              >
+                WIPE EVERYTHING
+              </button>
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }

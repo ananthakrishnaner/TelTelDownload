@@ -70,6 +70,50 @@ exports.bulkDeleteMedia = async (req, res) => {
   }
 };
 
+/**
+ * Wipe All — drop every Media doc and unlink every file on disk.
+ *
+ * This is destructive. The caller (UI) is expected to have walked
+ * the user through a 3-step confirmation modal. The backend just
+ * enforces a hard "confirm" token in the request body to make
+ * accidental CLI hits obvious in the logs.
+ *
+ * Body: { confirm: "WIPE_ALL" }
+ * Response: { success, deleted: { docs, files } }
+ */
+exports.wipeAllMedia = async (req, res) => {
+  try {
+    const { confirm } = req.body || {};
+    if (confirm !== 'WIPE_ALL') {
+      return res.status(400).json({
+        error: 'Missing confirmation token. Body must be { confirm: "WIPE_ALL" }.',
+      });
+    }
+    const all = await Media.find({}, { localPath: 1 });
+    let filesDeleted = 0;
+    let filesMissing = 0;
+    for (const m of all) {
+      if (m.localPath && fs.existsSync(m.localPath)) {
+        try { fs.unlinkSync(m.localPath); filesDeleted += 1; }
+        catch (e) { /* ignore — best-effort */ }
+      } else {
+        filesMissing += 1;
+      }
+    }
+    const docResult = await Media.deleteMany({});
+    res.json({
+      success: true,
+      deleted: {
+        docs: docResult.deletedCount || 0,
+        files: filesDeleted,
+        filesMissing,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
 exports.retryMedia = async (req, res) => {
   try {
     const { targetGroupId } = req.body || {};
