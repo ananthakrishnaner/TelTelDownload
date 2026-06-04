@@ -4,6 +4,8 @@ WORKDIR /usr/src/app
 
 COPY package*.json ./
 RUN npm install
+# Install serve BEFORE the memory-heavy build step
+RUN npm install -g serve
 
 COPY . .
 
@@ -12,5 +14,5 @@ RUN npm run build
 
 EXPOSE 5173
 
-# Serve the static files using a lightweight busybox httpd server to prevent NPM OOM
-CMD ["busybox", "httpd", "-f", "-v", "-p", "5173", "-h", "dist"]
+# Serve the static files
+CMD ["serve", "-s", "dist", "-l", "5173"]
