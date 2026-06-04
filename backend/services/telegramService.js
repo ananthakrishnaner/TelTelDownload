@@ -160,9 +160,16 @@ async function downloadAndMaybeUpload({ client, jobId, groupId, message, targetG
   const filePath = path.join(downloadDir, fileName);
 
   let existing = await Media.findOne({ telegramMessageId: msgId, channelId: groupId });
+  const link = telegramLinkFor(groupId, msgId);
 
   if (existing && fs.existsSync(existing.localPath) && (!targetGroupId || existing.status === 'uploaded_to_group')) {
-    progressEmitter.fileSkipped(jobId, { groupId });
+    // Distinguish "already on disk" from "already uploaded to target".
+    const reason = (targetGroupId && existing.status === 'uploaded_to_group')
+      ? 'Duplicate video detected · already uploaded to target group'
+      : 'Duplicate video detected · already on disk';
+    progressEmitter.fileSkipped(jobId, {
+      groupId, msgId, fileName, reason, telegramLink: link,
+    });
     return { skipped: true };
   }
 
@@ -391,7 +398,16 @@ async function bulkForwardLocalMedia(mediaIds, targetGroupId) {
     try {
       const media = await Media.findById(mediaId);
       if (!media || !fs.existsSync(media.localPath)) {
-        progressEmitter.fileSkipped(jobId, { groupId: targetGroupId });
+        const reason = !media
+          ? 'Duplicate detection · media not in vault'
+          : 'Duplicate detection · file missing on disk';
+        progressEmitter.fileSkipped(jobId, {
+          groupId: targetGroupId,
+          msgId: media?.telegramMessageId,
+          fileName: media?.fileName,
+          reason,
+          telegramLink: media ? telegramLinkFor(media.channelId, media.telegramMessageId) : null,
+        });
         uploadedCount += 1;
         continue;
       }
