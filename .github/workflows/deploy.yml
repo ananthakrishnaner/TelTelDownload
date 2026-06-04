@@ -145,6 +145,9 @@ jobs:
           FRONTEND_IMAGE: ${{ env.FRONTEND_IMAGE }}
           BACKEND_TAG: ${{ needs.build.outputs.backend_tag }}
           FRONTEND_TAG: ${{ needs.build.outputs.frontend_tag }}
+          # Used to write the host-side .env that compose interpolates.
+          ADMIN_USERNAME: ${{ secrets.ADMIN_USERNAME }}
+          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USERNAME }}
@@ -156,7 +159,7 @@ jobs:
           # the deployment host. Override with `known_hosts` if you
           # need strict checking.
           command_timeout: 15m
-          envs: TRIGGER,GITHUB_SHA,SHORT_SHA,REMOTE_DIR,REGISTRY,IMAGE_OWNER,BACKEND_IMAGE,FRONTEND_IMAGE,BACKEND_TAG,FRONTEND_TAG
+          envs: TRIGGER,GITHUB_SHA,SHORT_SHA,REMOTE_DIR,REGISTRY,IMAGE_OWNER,BACKEND_IMAGE,FRONTEND_IMAGE,BACKEND_TAG,FRONTEND_TAG,ADMIN_USERNAME,ADMIN_PASSWORD
           script: |
             set -euo pipefail
 
@@ -180,6 +183,19 @@ jobs:
             echo "::endgroup::"
 
             cd "$HOME/${REMOTE_DIR}"
+
+            # --- Write the host-side .env that docker-compose interpolates
+            # for ${ADMIN_USERNAME}/${ADMIN_PASSWORD}. The previous
+            # deploy relied on shell exports; this is more robust and
+            # survives multiple deploys. ---
+            echo "::group::[0/6] write .env (ADMIN_USERNAME, ADMIN_PASSWORD)"
+            cat > .env <<EOF
+ADMIN_USERNAME=$ADMIN_USERNAME
+ADMIN_PASSWORD=$ADMIN_PASSWORD
+EOF
+            echo "  ADMIN_USERNAME=$ADMIN_USERNAME"
+            echo "  ADMIN_PASSWORD set (len ${#ADMIN_PASSWORD})"
+            echo "::endgroup::"
 
             # --- Sync to the exact commit the workflow built. ---
             echo "::group::[1/6] git sync → $GITHUB_SHA"
