@@ -1,7 +1,7 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { FiX, FiSend, FiTrash2 } from 'react-icons/fi';
+import { FiX, FiSend, FiTrash2, FiRefreshCcw } from 'react-icons/fi';
 
-export default function CommandBar({ open, count, onForward, onDelete, onClear, label = 'selected' }) {
+export default function CommandBar({ open, count, onForward, onDelete, onRetry, onClear, label = 'selected' }) {
   return (
     <AnimatePresence>
       {open && (
@@ -24,6 +24,15 @@ export default function CommandBar({ open, count, onForward, onDelete, onClear, 
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium text-sky-400 hover:bg-sky-500/10 transition-colors"
               >
                 <FiSend size={14} /> Forward
+              </button>
+            )}
+            {onRetry && (
+              <button
+                onClick={onRetry}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium text-amber-400 hover:bg-amber-500/10 transition-colors"
+                title="Re-download all selected (only failed items are requeued; the rest are skipped)"
+              >
+                <FiRefreshCcw size={14} /> Retry failed
               </button>
             )}
             {onDelete && (

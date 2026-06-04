@@ -98,14 +98,40 @@ exports.stopJob = (req, res) => {
 
 exports.triggerDownload = async (req, res) => {
   try {
-    const { groupId, targetGroupId } = req.body;
+    const { groupId, targetGroupId, taskId } = req.body;
     // We run it asynchronously so it doesn't block the request
-    telegramService.downloadMediaForGroup(groupId, targetGroupId).then(count => {
+    telegramService.downloadMediaForGroup(groupId, targetGroupId, { taskId }).then(count => {
       console.log(`Finished manual download for ${groupId}. Downloaded: ${count}`);
     }).catch(console.error);
-    
+
     res.json({ success: true, message: 'Download started' });
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+};
+
+exports.getSession = (req, res) => {
+  try {
+    const state = telegramService.getSessionState();
+    res.json({ session: state });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.reconnectNow = async (req, res) => {
+  try {
+    const result = await telegramService.reconnectNow();
+    if (!result.ok && result.reason === 'revoked') {
+      return res.status(409).json({
+        ok: false,
+        reason: 'revoked',
+        error: 'Session is revoked. Re-authenticate via Settings.',
+        code: 'SESSION_EXPIRED',
+      });
+    }
+    res.json({ ok: true, session: telegramService.getSessionState() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 };

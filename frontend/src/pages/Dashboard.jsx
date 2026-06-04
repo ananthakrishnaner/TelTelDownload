@@ -12,6 +12,7 @@ import Drawer from '../components/Drawer';
 import Skeleton from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
 import ConfirmDrawer from '../components/ConfirmDrawer';
+import SessionPill from '../components/SessionPill';
 
 const PRESETS = [
   { label: 'Every hour', cron: '0 * * * *' },
@@ -178,13 +179,16 @@ export default function Dashboard() {
         description="The current state of your Telegram media pipelines — channels, jobs, and schedules in one view."
         accent="dashboard"
         actions={
-          <button
-            onClick={fetchData}
-            className="flex items-center gap-2 px-3 py-2 text-xs font-mono uppercase tracking-widest text-slate-400 hover:text-slate-100 transition-colors border border-[var(--color-hairline)] rounded-md"
-          >
-            <FiRefreshCw size={12} className={loading ? 'animate-spin' : ''} />
-            Refresh
-          </button>
+          <>
+            <SessionPill size="sm" />
+            <button
+              onClick={fetchData}
+              className="flex items-center gap-2 px-3 py-2 text-xs font-mono uppercase tracking-widest text-slate-400 hover:text-slate-100 transition-colors border border-[var(--color-hairline)] rounded-md"
+            >
+              <FiRefreshCw size={12} className={loading ? 'animate-spin' : ''} />
+              Refresh
+            </button>
+          </>
         }
       />
 

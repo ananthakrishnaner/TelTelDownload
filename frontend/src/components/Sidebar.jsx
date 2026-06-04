@@ -1,6 +1,7 @@
 import { NavLink, useNavigate } from 'react-router-dom';
 import { FiHome, FiSettings, FiLogOut, FiImage, FiActivity, FiFileText } from 'react-icons/fi';
 import useMediaQuery from '../hooks/useMediaQuery';
+import SessionPill from './SessionPill';
 
 const SECTIONS = [
   {
@@ -83,27 +84,32 @@ export default function Sidebar() {
 
   if (isMobile) {
     return (
-      <nav className="fixed bottom-0 left-0 right-0 z-40 surface-1 border-t border-[var(--color-hairline)] flex justify-around items-center px-2 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
-        {SECTIONS.flatMap((s) => s.items).map((item) => (
-          <NavLink
-            key={item.to}
-            to={item.to}
-            end={item.end}
-            className={({ isActive }) =>
-              `flex flex-col items-center gap-1 px-3 py-1.5 rounded-md transition-colors ${
-                isActive ? accentText[item.accent] : 'text-slate-500'
-              }`
-            }
-          >
-            {({ isActive }) => (
-              <>
-                <item.icon size={18} strokeWidth={isActive ? 2.25 : 1.75} />
-                <span className="text-[10px] font-mono uppercase tracking-wider">{item.label.split(' ')[0]}</span>
-              </>
-            )}
-          </NavLink>
-        ))}
-      </nav>
+      <>
+        <div className="fixed top-3 right-3 z-50">
+          <SessionPill size="sm" />
+        </div>
+        <nav className="fixed bottom-0 left-0 right-0 z-40 surface-1 border-t border-[var(--color-hairline)] flex justify-around items-center px-2 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+          {SECTIONS.flatMap((s) => s.items).map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              end={item.end}
+              className={({ isActive }) =>
+                `flex flex-col items-center gap-1 px-3 py-1.5 rounded-md transition-colors ${
+                  isActive ? accentText[item.accent] : 'text-slate-500'
+                }`
+              }
+            >
+              {({ isActive }) => (
+                <>
+                  <item.icon size={18} strokeWidth={isActive ? 2.25 : 1.75} />
+                  <span className="text-[10px] font-mono uppercase tracking-wider">{item.label.split(' ')[0]}</span>
+                </>
+              )}
+            </NavLink>
+          ))}
+        </nav>
+      </>
     );
   }
 
@@ -111,9 +117,12 @@ export default function Sidebar() {
     <aside className="hidden md:flex w-64 shrink-0 bg-[var(--color-surface-1)] border-r border-[var(--color-hairline)] flex-col h-screen sticky top-0">
       {/* Brand */}
       <div className="px-6 pt-7 pb-6 border-b border-[var(--color-hairline)]">
-        <div className="flex items-baseline gap-2">
-          <span className="font-display text-2xl italic font-light text-slate-100 tracking-tight">TelTel</span>
-          <span className="text-[9px] font-mono uppercase tracking-widest text-slate-500">v1.0</span>
+        <div className="flex items-baseline justify-between gap-2">
+          <div className="flex items-baseline gap-2">
+            <span className="font-display text-2xl italic font-light text-slate-100 tracking-tight">TelTel</span>
+            <span className="text-[9px] font-mono uppercase tracking-widest text-slate-500">v1.0</span>
+          </div>
+          <SessionPill size="sm" />
         </div>
         <p className="text-[10px] font-mono uppercase tracking-widest text-slate-600 mt-1.5">Media Manager</p>
       </div>

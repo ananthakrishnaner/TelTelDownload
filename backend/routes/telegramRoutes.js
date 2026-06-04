@@ -13,4 +13,8 @@ router.post('/stop-job/:id', telegramController.stopJob);
 router.post('/download', telegramController.triggerDownload);
 router.post('/download-specific', telegramController.downloadSpecific);
 
+// Session state + manual reconnect.
+router.get('/session', telegramController.getSession);
+router.post('/session/reconnect', telegramController.reconnectNow);
+
 module.exports = router;

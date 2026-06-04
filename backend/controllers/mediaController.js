@@ -62,17 +62,45 @@ exports.bulkDeleteMedia = async (req, res) => {
 
 exports.retryMedia = async (req, res) => {
   try {
-    const media = await Media.findById(req.params.id);
-    if (!media) return res.status(404).json({ error: 'Not found' });
-    
-    // We set status to downloaded, then the frontend can trigger the auto-upload loop if needed,
-    // or trigger downloadMediaForGroup again. Actually, retrying a specific media requires
-    // telegramService to just download that specific message.
-    media.status = 'downloaded';
-    await media.save();
-    res.json({ success: true });
+    const { targetGroupId } = req.body || {};
+    const telegramService = require('../services/telegramService');
+    // Launch in background; return immediately so the request doesn't block
+    // on what can be a long-running download (especially for video).
+    telegramService.retryMediaItem(req.params.id, targetGroupId)
+      .then(() => console.log('Retried media ' + req.params.id))
+      .catch(err => console.error('Retry failed for ' + req.params.id, err));
+
+    res.json({ success: true, message: 'Retry initiated' });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: err.message, code: err.code || 'RETRY_ERROR' });
+  }
+};
+
+exports.bulkRetryMedia = async (req, res) => {
+  try {
+    const { mediaIds, targetGroupId } = req.body;
+    if (!mediaIds || !Array.isArray(mediaIds) || mediaIds.length === 0) {
+      return res.status(400).json({ error: 'mediaIds must be a non-empty array' });
+    }
+    const telegramService = require('../services/telegramService');
+
+    // Run retries sequentially in the background. We don't have a single
+    // jobId for the bulk yet, so we fire one retryMediaItem per id.
+    (async () => {
+      for (const id of mediaIds) {
+        if (!id) continue;
+        try {
+          await telegramService.retryMediaItem(id, targetGroupId);
+        } catch (err) {
+          console.error('Bulk retry item failed', id, err.message);
+        }
+      }
+      console.log(`Bulk retry finished (${mediaIds.length} items)`);
+    })().catch(console.error);
+
+    res.json({ success: true, message: `Bulk retry initiated (${mediaIds.length} items)` });
+  } catch (err) {
+    res.status(500).json({ error: err.message, code: err.code || 'BULK_RETRY_ERROR' });
   }
 };
 

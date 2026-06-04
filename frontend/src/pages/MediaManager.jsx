@@ -125,6 +125,30 @@ export default function MediaManager() {
     }
   };
 
+  // Bulk-retry: only media that are actually in `failed` state get
+  // requeued. Anything else is silently skipped, so the user can
+  // select a wide range without worrying about double-downloading.
+  const handleBulkRetry = async () => {
+    const failedIds = media
+      .filter((m) => selected.includes(m._id) && m.status === 'failed')
+      .map((m) => m._id);
+    if (failedIds.length === 0) {
+      toast.info('Nothing to retry', { description: 'No failed items in your selection.' });
+      return;
+    }
+    try {
+      const res = await api.post('/media/bulk-retry', { mediaIds: failedIds });
+      const queued = res.data?.queued ?? failedIds.length;
+      const skipped = selected.length - failedIds.length;
+      toast.success(`Re-queued ${queued} failed item${queued === 1 ? '' : 's'}`, {
+        description: skipped > 0 ? `${skipped} non-failed item${skipped === 1 ? '' : 's'} skipped` : undefined,
+      });
+      fetchMedia();
+    } catch (err) {
+      toast.error('Bulk retry failed', { description: err.message });
+    }
+  };
+
   const filtered = useMemo(() => {
     return media.filter((m) => {
       if (typeFilter === 'photo' && !isPhoto(m.fileName)) return false;
@@ -343,6 +367,7 @@ export default function MediaManager() {
         open={selected.length > 0}
         count={selected.length}
         onForward={() => setForwardDrawer({ open: true, target: forwardDrawer.target, single: null })}
+        onRetry={handleBulkRetry}
         onDelete={handleBulkDelete}
         onClear={() => setSelected([])}
       />

@@ -10,6 +10,7 @@ import ChannelDetail from './pages/ChannelDetail';
 import Sidebar from './components/Sidebar';
 import Toaster from './components/Toaster';
 import useShortcuts from './hooks/useShortcuts';
+import { SessionStatusProvider } from './hooks/useSessionStatus';
 
 const ProtectedRoute = ({ children }) => {
   const token = localStorage.getItem('token');
@@ -116,18 +117,20 @@ function AnimatedRoutes() {
 
 function App() {
   return (
-    <Router>
-      <Routes>
-        <Route path="/login" element={<Login />} />
-        <Route path="*" element={
-          <>
-            <AnimatedRoutes />
-            <ShortcutsOverlay />
-            <Toaster />
-          </>
-        } />
-      </Routes>
-    </Router>
+    <SessionStatusProvider>
+      <Router>
+        <Routes>
+          <Route path="/login" element={<Login />} />
+          <Route path="*" element={
+            <>
+              <AnimatedRoutes />
+              <ShortcutsOverlay />
+              <Toaster />
+            </>
+          } />
+        </Routes>
+      </Router>
+    </SessionStatusProvider>
   );
 }
 
