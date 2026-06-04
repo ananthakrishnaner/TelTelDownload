@@ -221,7 +221,23 @@ jobs:
             docker-compose pull
             echo "::endgroup::"
 
+            # --- Workaround for docker-compose 1.29.2 ContainerConfig bug.
+            # When a service is pulled from a registry (not built locally),
+            # 1.29.2 reads the OLD container's image_config which lacks the
+            # 'ContainerConfig' key, and crashes with:
+            #   KeyError: 'ContainerConfig'  in get_container_data_volumes
+            # Remove the affected containers first so up has to recreate
+            # them from scratch instead of trying to converge.
             echo "::group::[5/6] docker-compose up -d"
+            for c in teltel_backend teltel_frontend; do
+              if docker ps -a --format '{{.Names}}' | grep -q "^${c}\$"; then
+                echo "  removing old $c (workaround for compose 1.29.2 ContainerConfig bug)"
+                docker rm -f "$c" 2>/dev/null || true
+              fi
+            done
+            # Also drop the orphan network and any stale container refs
+            # so compose doesn't try to re-converge an old image.
+            docker-compose down --remove-orphans 2>/dev/null || true
             docker-compose up -d
             echo "  --- container status immediately after up ---"
             docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}'
@@ -245,6 +261,15 @@ jobs:
               echo "::error::Health gate FAILED — /api/ready never returned 200. Rolling back."
 
               echo "::group::⏪ ROLLBACK"
+              # Remove the broken new containers first so compose
+              # recreates from the rolled-back image instead of
+              # crashing on ContainerConfig again.
+              for c in teltel_backend teltel_frontend; do
+                if docker ps -a --format '{{.Names}}' | grep -q "^${c}\$"; then
+                  echo "  removing failed $c"
+                  docker rm -f "$c" 2>/dev/null || true
+                fi
+              done
               if [ -f "docker-compose.yml.bak.$PREV_SHA" ]; then
                 cp "docker-compose.yml.bak.$PREV_SHA" docker-compose.yml
                 echo "  restored compose from docker-compose.yml.bak.$PREV_SHA"
