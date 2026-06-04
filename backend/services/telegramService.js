@@ -1,10 +1,9 @@
 // telegramService.js
-// Telegram-bound business logic. Owns the `activeJobs` in-memory map and
-// the public download / forward / sign-in surface.
-//
-// The GramJS client and the connection state machine live in
-// `sessionManager.js`. This file asks for a client via
-// `sessionManager.getClient()` and never holds one itself.
+// Telegram-bound business logic. The GramJS client and the connection
+// state machine live in `sessionManager.js`; the canonical in-memory
+// job state lives in `progressEmitter.js`. This file asks for a
+// client via `sessionManager.getClient()` and for job state via
+// `progressEmitter.startJob/...` — it does NOT keep its own map.
 
 const { Api } = require('telegram');
 const Setting = require('../models/Setting');
@@ -19,7 +18,21 @@ const progressEmitter = require('../utils/progressEmitter');
 const { retryWithBackoff } = require('../utils/retry');
 const logActivity = require('../utils/logger');
 
-const activeJobs = new Map();
+// Build a t.me/c/<group>/<msg> deep-link for any (groupId, msgId).
+// Works for supergroups (id starts with -100) and channels.
+function telegramLinkFor(groupId, msgId) {
+  if (groupId == null || msgId == null) return null;
+  const s = String(groupId);
+  if (s.startsWith('-100')) {
+    const bare = s.slice(4);
+    return `https://t.me/c/${bare}/${msgId}`;
+  }
+  if (s.startsWith('-')) {
+    // basic chat / unknown
+    return null;
+  }
+  return null;
+}
 
 // --- Client helpers -----------------------------------------------------
 
@@ -45,32 +58,14 @@ async function requireClient() {
 
 // --- Public surface ----------------------------------------------------
 
-exports.getActiveJobs = () => {
-  return Array.from(activeJobs.values()).map((job) => ({
-    id: job.id,
-    type: job.type,
-    groupId: job.groupId,
-    taskId: job.taskId,
-    status: job.status,
-    progress: job.progress,
-    total: job.total,
-    failed: job.failed || 0,
-    skipped: job.skipped || 0,
-    rate: job.rate || 0,
-    etaMs: job.etaMs,
-    startedAt: job.startedAt,
-  }));
-};
+exports.getActiveJobs = () => progressEmitter.snapshotForIds();
 
 exports.stopJob = (jobId) => {
-  const job = activeJobs.get(jobId);
-  if (job) {
-    job.abortController.abort();
-    job.status = 'aborted';
-    return true;
-  }
-  return false;
+  const res = progressEmitter.stopJob(jobId, { reason: 'user_request' });
+  return !!res.ok;
 };
+
+exports.getJobLog = (jobId, opts) => progressEmitter.getLog(jobId, opts);
 
 exports.getSessionState = () => sessionManager.getState();
 
@@ -260,23 +255,11 @@ async function downloadMediaForGroup(groupId, targetGroupId = null, { taskId = n
   const messages = await retryWithBackoff(() => client.getMessages(entity, { limit: 10000, filter: new Api.InputMessagesFilterPhotoVideo() }));
   const validMessages = messages.filter((m) => m.media);
 
-  activeJobs.set(jobId, {
-    id: jobId,
-    type: 'group_pull',
-    groupId,
-    taskId,
-    status: 'running',
-    progress: 0,
-    total: validMessages.length,
-    failed: 0,
-    skipped: 0,
-    rate: 0,
-    etaMs: null,
-    startedAt: Date.now(),
-    abortController,
+  progressEmitter.startJob({
+    jobId, type: 'group_pull', groupId, taskId,
+    total: validMessages.length, abortController,
   });
-
-  progressEmitter.startJob({ jobId, type: 'group_pull', groupId, taskId, total: validMessages.length });
+  progressEmitter.log(jobId, 'info', `Starting group pull: ${validMessages.length} candidates in ${groupId}`);
 
   let downloadedCount = 0;
   for (const message of validMessages) {
@@ -285,12 +268,9 @@ async function downloadMediaForGroup(groupId, targetGroupId = null, { taskId = n
       client, jobId, groupId, message, targetGroupId,
       downloadDir, abortSignal: abortController.signal,
       onRetry: ({ attempt, waitMs, reason }) => {
-        const j = activeJobs.get(jobId);
-        if (j) {
-          j.rate = 0;
-          j.etaMs = null;
-        }
         logActivity('Retry', { jobId, msgId: message.id, attempt, waitMs, reason }, 'warning');
+        progressEmitter.log(jobId, 'warning',
+          `Retry ${attempt} for msg ${message.id} in ${waitMs}ms (${reason})`);
       },
     });
     if (!result.skipped) downloadedCount += 1;
@@ -310,23 +290,11 @@ async function downloadSpecificMedia(groupId, messageIds, targetGroupId = null, 
   const entity = await retryWithBackoff(() => client.getEntity(groupId));
   const messages = await retryWithBackoff(() => client.getMessages(entity, { ids: messageIds }));
 
-  activeJobs.set(jobId, {
-    id: jobId,
-    type: 'specific_pull',
-    groupId,
-    taskId,
-    status: 'running',
-    progress: 0,
-    total: messages.length,
-    failed: 0,
-    skipped: 0,
-    rate: 0,
-    etaMs: null,
-    startedAt: Date.now(),
-    abortController,
+  progressEmitter.startJob({
+    jobId, type: 'specific_pull', groupId, taskId,
+    total: messages.length, abortController,
   });
-
-  progressEmitter.startJob({ jobId, type: 'specific_pull', groupId, taskId, total: messages.length });
+  progressEmitter.log(jobId, 'info', `Selective pull: ${messages.length} ids from ${groupId}`);
 
   let downloadedCount = 0;
   for (const message of messages) {
@@ -347,12 +315,34 @@ async function getRecentMedia(groupId) {
   const client = await requireClient();
   const entity = await retryWithBackoff(() => client.getEntity(groupId));
   const messages = await retryWithBackoff(() => client.getMessages(entity, { limit: 1000, filter: new Api.InputMessagesFilterPhotoVideo() }));
-  return messages.filter((m) => m.media).map((m) => ({
-    id: m.id,
-    caption: m.message || '',
-    type: m.media.photo ? 'photo' : 'video',
-    estimatedExt: extForMessage(m),
-  }));
+  const mediaMessages = messages.filter((m) => m.media);
+
+  // Cross-reference with the local Media collection so the UI can
+  // preview already-downloaded items immediately (no extra Telegram
+  // round-trip). Items not yet on disk still come back — they just
+  // have fileName=null and the UI renders a "download" state.
+  const messageIds = mediaMessages.map((m) => m.id);
+  const localMedia = await Media.find({
+    channelId: String(groupId),
+    telegramMessageId: { $in: messageIds },
+  }).select('telegramMessageId fileName status localPath mimeType fileSize').lean();
+  const byMessageId = new Map(localMedia.map((m) => [m.telegramMessageId, m]));
+
+  return mediaMessages.map((m) => {
+    const local = byMessageId.get(m.id);
+    return {
+      id: m.id,
+      caption: m.message || '',
+      type: m.media.photo ? 'photo' : 'video',
+      estimatedExt: extForMessage(m),
+      // Surface local download state (or null if not yet on disk).
+      fileName: local?.fileName || null,
+      localPath: local?.localPath || null,
+      status: local?.status || 'remote',
+      mimeType: local?.mimeType || null,
+      fileSize: local?.fileSize || null,
+    };
+  });
 }
 
 async function forwardLocalMedia(mediaId, targetGroupId) {
@@ -389,22 +379,11 @@ async function bulkForwardLocalMedia(mediaIds, targetGroupId) {
   const jobId = uuidv4();
   const abortController = new AbortController();
 
-  activeJobs.set(jobId, {
-    id: jobId,
-    type: 'bulk_upload',
-    groupId: targetGroupId,
-    status: 'running',
-    progress: 0,
-    total: mediaIds.length,
-    failed: 0,
-    skipped: 0,
-    rate: 0,
-    etaMs: null,
-    startedAt: Date.now(),
-    abortController,
+  progressEmitter.startJob({
+    jobId, type: 'bulk_upload', groupId: targetGroupId,
+    total: mediaIds.length, abortController,
   });
-
-  progressEmitter.startJob({ jobId, type: 'bulk_upload', groupId: targetGroupId, total: mediaIds.length });
+  progressEmitter.log(jobId, 'info', `Bulk upload: ${mediaIds.length} media to ${targetGroupId}`);
 
   let uploadedCount = 0;
   for (const mediaId of mediaIds) {
@@ -465,21 +444,11 @@ async function retryMediaItem(mediaId, targetGroupId = null) {
 
   const jobId = uuidv4();
   const abortController = new AbortController();
-  activeJobs.set(jobId, {
-    id: jobId,
-    type: 'single_retry',
-    groupId: media.channelId,
-    status: 'running',
-    progress: 0,
-    total: 1,
-    failed: 0,
-    skipped: 0,
-    rate: 0,
-    etaMs: null,
-    startedAt: Date.now(),
-    abortController,
+  progressEmitter.startJob({
+    jobId, type: 'single_retry', groupId: media.channelId,
+    total: 1, abortController,
   });
-  progressEmitter.startJob({ jobId, type: 'single_retry', groupId: media.channelId, total: 1 });
+  progressEmitter.log(jobId, 'info', `Single retry: media ${mediaId} (${media.fileName || 'unknown'})`);
 
   // Fetch the message from the channel so we can re-download it.
   const entity = await retryWithBackoff(() => client.getEntity(media.channelId));
@@ -497,17 +466,21 @@ async function retryMediaItem(mediaId, targetGroupId = null) {
 }
 
 async function finishJob(jobId, { type, groupId, total }) {
-  const job = activeJobs.get(jobId);
+  const job = progressEmitter.getRaw(jobId);
   if (!job) return;
-  job.status = job.status === 'aborted' ? 'aborted' : 'completed';
+  // Preserve any 'aborted' set by stopJob, otherwise mark completed
+  // (or 'partial' if some files failed — see endJob for the same logic).
+  const finalStatus = job.status === 'aborted'
+    ? 'aborted'
+    : (job.failed > 0 ? 'partial' : 'completed');
   try {
     await JobHistory.create({
-      jobId: job.id,
+      jobId,
       type,
       groupId,
       taskId: job.taskId,
-      status: job.status,
-      progress: job.progress,
+      status: finalStatus,
+      progress: job.current,
       total,
       failed: job.failed,
       skipped: job.skipped,
@@ -515,8 +488,9 @@ async function finishJob(jobId, { type, groupId, total }) {
       completedAt: Date.now(),
     });
   } catch (e) { console.error('Failed to save JobHistory:', e); }
-  progressEmitter.endJob(jobId, { status: job.status });
-  setTimeout(() => activeJobs.delete(jobId), 10_000);
+  progressEmitter.log(jobId, 'info',
+    `Job ${finalStatus}: ${job.current}/${total} processed, ${job.failed} failed, ${job.skipped} skipped`);
+  progressEmitter.endJob(jobId, { status: finalStatus });
 }
 
 // Replace the entire module.exports object in one shot with the public API.

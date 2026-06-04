@@ -16,11 +16,19 @@
 //   - legacy:        `job_progress`     ← per-file count
 // The legacy shapes are preserved so existing frontend code (Dashboard's
 // per-channel pulse, etc.) keeps working.
+//
+// Source of truth: the jobState map below is THE authoritative state
+// for all running jobs. telegramService.getActiveJobs() and stopJob()
+// both read/write through this module — there is no separate
+// `activeJobs` map elsewhere.
 
 const socket = require('../socket');
+let logActivity = null;
+try { logActivity = require('./logger'); } catch (_) { /* optional */ }
 
 const PER_BYTE_THROTTLE_MS = 100;
 const EMA_ALPHA = 0.4;
+const ETA_PERSIST_MS = 10_000;     // keep finished jobs around for the UI
 
 // Per-(jobId,msgId) last-emit timestamp for throttling per-byte callbacks.
 const lastEmit = new Map();
@@ -30,9 +38,13 @@ const jobState = new Map();
 // jobState: {
 //   type, groupId, taskId?,
 //   total, current, failed, skipped,
+//   status,             // 'running' | 'aborted' | 'completed' | 'failed'
 //   startedAt, lastTickAt, lastCurrent,
 //   rateEma (items/sec), etaMs,
-//   bytesTotal, bytesDone
+//   bytesTotal, bytesDone,
+//   currentFile: { msgId, fileName, type, bytesPerSec } | null,
+//   _abortController,                  // optional AbortController
+//   _completionHistory: [..last 5],    // {at, name, ok}
 // }
 
 function nowMs() { return Date.now(); }
@@ -77,6 +89,8 @@ function emitV2(jobId) {
     rate: s.rateEma,           // items/sec
     etaMs: s.etaMs,            // ms until done; null if unknown
     bytesPerSec: s._bps || 0,  // bytes/sec (for current file)
+    currentFile: s.currentFile || null,
+    startedAt: s.startedAt,
   };
   io.emit('job_progress_v2', payload);
   // Legacy alias for the per-file count.
@@ -105,8 +119,11 @@ function recalcRate(jobId) {
 
 // --- Public API ---------------------------------------------------------
 
-/** Start a new job. Call once before any progress is reported. */
-function startJob({ jobId, type, groupId, taskId, total }) {
+/** Start a new job. Call once before any progress is reported.
+ *  `abortController` is optional but required if you want stopJob to
+ *  actually cancel the in-flight work.
+ */
+function startJob({ jobId, type, groupId, taskId, total, abortController }) {
   const s = getOrInit(jobId, { type, groupId, taskId, total });
   s.type = type;
   s.groupId = groupId;
@@ -115,18 +132,60 @@ function startJob({ jobId, type, groupId, taskId, total }) {
   s.current = 0;
   s.failed = 0;
   s.skipped = 0;
+  s.status = 'running';
   s.startedAt = nowMs();
   s.lastTickAt = nowMs();
   s.lastCurrent = 0;
   s.rateEma = 0;
   s.etaMs = null;
+  s._abortController = abortController || null;
+  s.currentFile = null;
+  s._log = [];     // activity log for this job (capped)
   emitV2(jobId);
+}
+
+/** Record an activity-log entry for a job (visible in ActiveJobs UI). */
+function log(jobId, level, message, extra = null) {
+  const s = jobState.get(jobId);
+  if (!s) return;
+  if (!s._log) s._log = [];
+  s._log.push({ at: nowMs(), level, message, ...(extra || {}) });
+  if (s._log.length > 200) s._log.splice(0, s._log.length - 200);
+  // Also echo to the global activity log on the server.
+  if (logActivity) {
+    try { logActivity(level === 'error' ? 'Error' : 'Info', { jobId, ...(extra || {}), msg: message }, level === 'error' ? 'error' : 'info'); } catch (_) {}
+  }
+  // Fan out a live log event so the UI can append without re-fetching.
+  const io = socket.getIO();
+  if (io) io.emit('job_log', { jobId, at: nowMs(), level, message, ...(extra || {}) });
+}
+
+/** Mark the file currently in flight for the job — for UI "current" column. */
+function setCurrentFile(jobId, info) {
+  const s = jobState.get(jobId);
+  if (!s) return;
+  s.currentFile = info ? {
+    msgId: info.msgId,
+    fileName: info.fileName,
+    type: info.type,
+    bytesPerSec: info.bytesPerSec || 0,
+    startedAt: info.startedAt || nowMs(),
+  } : null;
+}
+
+/** Track rolling per-file bytes/sec. */
+function noteBytes(jobId, msgId, deltaBytes) {
+  const s = jobState.get(jobId);
+  if (!s) return;
+  s._bps = s._bps || 0;
+  s._bps = s._bps * 0.7 + (deltaBytes || 0) * 0.3;
 }
 
 /** A file completed (success path). */
 function fileCompleted(jobId, { groupId, msgId, fileName } = {}) {
   const s = getOrInit(jobId, { groupId });
   s.current += 1;
+  s.currentFile = null;
   recalcRate(jobId);
   // Also fire the legacy per-file complete event so existing UI works.
   const io = socket.getIO();
@@ -136,21 +195,36 @@ function fileCompleted(jobId, { groupId, msgId, fileName } = {}) {
   emitV2(jobId);
 }
 
-/** A file was skipped (e.g. already on disk). */
-function fileSkipped(jobId, { groupId } = {}) {
+/** A file was skipped (e.g. already on disk / duplicate). */
+function fileSkipped(jobId, { groupId, reason, msgId, fileName, telegramLink } = {}) {
   const s = getOrInit(jobId, { groupId });
   s.skipped += 1;
   s.current += 1;
+  s.currentFile = null;
   recalcRate(jobId);
+  // Log every skip with a reason so the user can see why a file was
+  // skipped (duplicate, already on disk, etc.).
+  if (reason) {
+    const link = telegramLink ? ` (${telegramLink})` : '';
+    log(jobId, 'info', `${reason}${fileName ? ` · ${fileName}` : ''}${link}`, {
+      msgId, fileName, reason, telegramLink, kind: 'skip',
+    });
+  }
   emitV2(jobId);
 }
 
 /** A file failed. */
-function fileFailed(jobId, { groupId, error } = {}) {
+function fileFailed(jobId, { groupId, msgId, fileName, error } = {}) {
   const s = getOrInit(jobId, { groupId });
   s.failed += 1;
   // Failed items still take time but don't advance current.
+  s.currentFile = null;
   recalcRate(jobId);
+  if (error) {
+    log(jobId, 'error', `${error.message || error}${fileName ? ` · ${fileName}` : ''}`, {
+      msgId, fileName, kind: 'fail',
+    });
+  }
   emitV2(jobId);
 }
 
@@ -183,10 +257,12 @@ function fileFinished({ groupId, msgId, fileName, type }) {
 }
 
 /** Mark a job done. Emits a final v2 and a `job_done` event. */
-function endJob(jobId, { status }) {
+function endJob(jobId, { status } = {}) {
   const s = jobState.get(jobId);
   if (!s) return;
+  s.status = status || (s.failed > 0 ? 'partial' : 'completed');
   s.etaMs = 0;
+  s.currentFile = null;
   emitV2(jobId);
   const io = socket.getIO();
   io.emit('job_done', {
@@ -194,7 +270,7 @@ function endJob(jobId, { status }) {
     taskId: s.taskId,
     type: s.type,
     groupId: s.groupId,
-    status: status || 'completed',
+    status: s.status,
     current: s.current,
     total: s.total,
     failed: s.failed,
@@ -202,25 +278,29 @@ function endJob(jobId, { status }) {
   });
   // Keep the state around for 10 s so the UI can render the final frame
   // and re-fetch active-jobs reflects the completion.
-  setTimeout(() => jobState.delete(jobId), 10_000);
+  setTimeout(() => jobState.delete(jobId), ETA_PERSIST_MS);
 }
 
-/** Snapshot for /api/telegram/active-jobs. */
-function snapshot() {
-  return Array.from(jobState.values()).map((s) => ({
-    id: s._jobId, // not used; key map below
-    type: s.type,
-    groupId: s.groupId,
-    taskId: s.taskId,
-    status: 'running',
-    progress: s.current,
-    total: s.total,
-    failed: s.failed,
-    skipped: s.skipped,
-    rate: s.rateEma,
-    etaMs: s.etaMs,
-    startedAt: s.startedAt,
-  }));
+/** Request cancellation of a running job. Aborts the AbortController
+ *  (which the download loop must be polling) and marks the state.
+ *  Returns true if the job existed and was running, false otherwise.
+ */
+function stopJob(jobId, { reason } = {}) {
+  const s = jobState.get(jobId);
+  if (!s) return { ok: false, reason: 'not_found' };
+  if (s.status !== 'running') return { ok: false, reason: `already_${s.status}`, state: s };
+  s.status = 'aborted';
+  s.currentFile = null;
+  if (s._abortController) {
+    try { s._abortController.abort(); } catch (_) {}
+  }
+  log(jobId, 'warning', `Job aborted${reason ? ` · ${reason}` : ''}`);
+  emitV2(jobId);
+  return { ok: true, state: s };
+}
+
+function getRaw(jobId) {
+  return jobState.get(jobId) || null;
 }
 
 function snapshotForIds(ids = null) {
@@ -232,7 +312,7 @@ function snapshotForIds(ids = null) {
       type: s.type,
       groupId: s.groupId,
       taskId: s.taskId,
-      status: 'running',
+      status: s.status,
       progress: s.current,
       total: s.total,
       failed: s.failed,
@@ -240,9 +320,18 @@ function snapshotForIds(ids = null) {
       rate: s.rateEma,
       etaMs: s.etaMs,
       startedAt: s.startedAt,
+      currentFile: s.currentFile,
+      recentLog: (s._log || []).slice(-10),
     });
   }
   return arr;
+}
+
+function getLog(jobId, { sinceMs = 0, limit = 200 } = {}) {
+  const s = jobState.get(jobId);
+  if (!s) return [];
+  const log = s._log || [];
+  return log.filter((e) => !sinceMs || e.at > sinceMs).slice(-limit);
 }
 
 module.exports = {
@@ -252,6 +341,13 @@ module.exports = {
   fileFailed,
   byteProgress,
   fileFinished,
+  fileFinished,
+  setCurrentFile,
+  noteBytes,
   endJob,
+  stopJob,
   snapshotForIds,
+  getRaw,
+  getLog,
+  log,
 };
