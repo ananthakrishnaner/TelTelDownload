@@ -20,9 +20,13 @@ RUN touch src/main.rs && cargo build --release
 
 # ---- runtime stage -----------------------------------------------------
 FROM debian:bookworm-slim
-# ffmpeg 6.x pinned. The `7:6.1*` glob catches the latest 6.1 patch.
+# ffmpeg 5.1.x pinned to the 5.1 series via a `7:5.1*` epoch-major glob
+# (the `7:` is the ffmpeg epoch; `5.1*` catches every 5.1.y patch from
+# bookworm + bookworm-security). 6.x and 7.x are no longer in bookworm
+# (they're in trixie, the new stable), so cross-pinning would require a
+# trixie backports source — not worth the fragility for dHash.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg=7:6.1* ca-certificates libstdc++6 wget \
+    ffmpeg=7:5.1* ca-certificates libstdc++6 wget \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /usr/local/bin
 COPY --from=build /app/target/release/teltel_indexer /usr/local/bin/teltel_indexer
