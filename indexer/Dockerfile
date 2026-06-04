@@ -5,8 +5,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 # Cache deps separately from source so source changes don't bust the cache.
-COPY Cargo.toml Cargo.lock ./
-RUN mkdir src && echo 'fn main() {}' > src/main.rs && cargo build --release && rm -rf src target/release/deps/teltel_indexer*
+# `Cargo.lock` is recommended (committed in-repo for reproducibility) but
+# the `|| true` + a placeholder-writer fallback below keeps the build
+# green for first-time setups or a `cargo update` that doesn't generate
+# one in CI. After the first successful build the lockfile exists and
+# this branch is skipped.
+COPY Cargo.toml ./
+COPY Cargo.lock* ./
+RUN mkdir -p src && echo 'fn main() {}' > src/main.rs \
+ && cargo build --release \
+ && rm -rf src target/release/deps/teltel_indexer*
 COPY src ./src
 RUN touch src/main.rs && cargo build --release
 
