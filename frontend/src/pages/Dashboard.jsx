@@ -106,8 +106,11 @@ export default function Dashboard() {
     // signal. The legacy 'job_progress >= total' heuristic misses
     // aborted jobs, so the previous version of this component left
     // stopped jobs hanging in the UI as if they were still running.
+    // We drop the job from BOTH the activeJobs list (the card grid)
+    // AND the jobProgress map (the per-job live counters).
     socketRef.current.on('job_done', (data) => {
       if (!data) return;
+      setActiveJobs((prev) => prev.filter((j) => j.id !== data.jobId));
       setJobProgress((prev) => {
         const next = { ...prev };
         delete next[data.jobId];

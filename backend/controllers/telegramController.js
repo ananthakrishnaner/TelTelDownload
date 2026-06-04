@@ -69,7 +69,10 @@ exports.downloadSpecific = async (req, res) => {
 
 exports.getActiveJobs = (req, res) => {
   try {
-    const jobs = telegramService.getActiveJobs();
+    // Filter to only running jobs. Aborted/completed jobs are still
+    // in the in-memory snapshot (kept for 10s for the UI to render
+    // the final frame) but should not appear in the "active" list.
+    const jobs = telegramService.getActiveJobs().filter((j) => j.status === 'running');
     res.json({ jobs });
   } catch (err) {
     res.status(500).json({ error: err.message });

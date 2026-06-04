@@ -138,6 +138,7 @@ export default function ActiveJobs() {
           type: p.type || (idx >= 0 ? prev[idx].type : 'group_pull'),
           groupId: p.groupId,
           taskId: p.taskId,
+          taskName: p.taskName || (idx >= 0 ? prev[idx].taskName : null),
           status: p.status || (idx >= 0 ? prev[idx].status : 'running'),
           progress: p.current,
           total: p.total,
@@ -291,6 +292,34 @@ export default function ActiveJobs() {
         }
       />
 
+      {/* "Schedule started" banner — surfaces whenever one or more
+       *  running jobs were kicked off by a scheduled task. The list
+       *  inside deduplicates by taskId so a multi-channel schedule
+       *  shows as a single "Schedule started · <name>" pill. */}
+      {(() => {
+        const scheduled = new Map();
+        for (const j of jobs) {
+          if (j.taskId) {
+            if (!scheduled.has(j.taskId)) {
+              scheduled.set(j.taskId, { taskId: j.taskId, taskName: j.taskName || 'Scheduled task', count: 0 });
+            }
+            scheduled.get(j.taskId).count += 1;
+          }
+        }
+        if (scheduled.size === 0) return null;
+        return (
+          <div className="mb-4 flex flex-wrap items-center gap-2 px-3 py-2 rounded-md bg-indigo-500/5 ring-1 ring-indigo-500/20">
+            <FiCpu className="text-indigo-300" size={12} />
+            <span className="text-[10px] font-mono uppercase tracking-widest text-indigo-300">schedule started</span>
+            {Array.from(scheduled.values()).map((s) => (
+              <span key={s.taskId} className="text-[10px] font-mono text-indigo-200 bg-indigo-500/15 ring-1 ring-indigo-500/30 px-2 py-0.5 rounded">
+                {s.taskName} <span className="text-indigo-400">·</span> {s.count} channel{s.count === 1 ? '' : 's'}
+              </span>
+            ))}
+          </div>
+        );
+      })()}
+
       {/* Throughput panel */}
       <section className="surface-1 rounded-lg p-5 mb-6">
         <div className="flex items-baseline justify-between mb-3">
@@ -366,8 +395,11 @@ export default function ActiveJobs() {
                       <span className="font-mono text-xs text-slate-500">grp:{job.groupId}</span>
                       <span className="text-xs text-slate-500 font-mono">job:{job.id.slice(0, 8)}</span>
                       {job.taskId && (
-                        <span className="text-[10px] font-mono text-indigo-300 bg-indigo-500/10 ring-1 ring-indigo-500/20 px-1.5 py-0.5 rounded inline-flex items-center gap-1">
-                          <FiCpu size={9} /> scheduled
+                        <span className="text-[10px] font-mono text-indigo-300 bg-indigo-500/10 ring-1 ring-indigo-500/20 px-1.5 py-0.5 rounded inline-flex items-center gap-1" title="This job was started by a scheduled task">
+                          <FiCpu size={9} /> schedule started
+                          {job.taskName && (
+                            <span className="text-indigo-200 ml-1">· {job.taskName}</span>
+                          )}
                         </span>
                       )}
                     </p>

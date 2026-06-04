@@ -283,7 +283,7 @@ async function downloadAndMaybeUpload({ client, jobId, groupId, message, targetG
   }
 }
 
-async function downloadMediaForGroup(groupId, targetGroupId = null, { taskId = null, jobId: providedJobId = null } = {}) {
+async function downloadMediaForGroup(groupId, targetGroupId = null, { taskId = null, taskName = null, jobId: providedJobId = null } = {}) {
   const client = await requireClient();
   const downloadDir = path.join(__dirname, '..', 'media_downloads');
   if (!fs.existsSync(downloadDir)) fs.mkdirSync(downloadDir, { recursive: true });
@@ -296,7 +296,7 @@ async function downloadMediaForGroup(groupId, targetGroupId = null, { taskId = n
   const validMessages = messages.filter((m) => m.media);
 
   progressEmitter.startJob({
-    jobId, type: 'group_pull', groupId, taskId,
+    jobId, type: 'group_pull', groupId, taskId, taskName,
     total: validMessages.length, abortController,
   });
   progressEmitter.log(jobId, 'info', `Starting group pull: ${validMessages.length} candidates in ${groupId}`);
@@ -365,7 +365,7 @@ async function downloadMediaForGroup(groupId, targetGroupId = null, { taskId = n
   return downloadedCount;
 }
 
-async function downloadSpecificMedia(groupId, messageIds, targetGroupId = null, { taskId = null, jobId: providedJobId = null } = {}) {
+async function downloadSpecificMedia(groupId, messageIds, targetGroupId = null, { taskId = null, taskName = null, jobId: providedJobId = null } = {}) {
   const client = await requireClient();
   const downloadDir = path.join(__dirname, '..', 'media_downloads');
   if (!fs.existsSync(downloadDir)) fs.mkdirSync(downloadDir, { recursive: true });
@@ -376,7 +376,7 @@ async function downloadSpecificMedia(groupId, messageIds, targetGroupId = null, 
   const messages = await retryWithBackoff(() => client.getMessages(entity, { ids: messageIds }));
 
   progressEmitter.startJob({
-    jobId, type: 'specific_pull', groupId, taskId,
+    jobId, type: 'specific_pull', groupId, taskId, taskName,
     total: messages.length, abortController,
   });
   progressEmitter.log(jobId, 'info', `Selective pull: ${messages.length} ids from ${groupId}`);

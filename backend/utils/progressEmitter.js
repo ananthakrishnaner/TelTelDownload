@@ -36,7 +36,7 @@ const lastEmit = new Map();
 // Per-job rolling state.
 const jobState = new Map();
 // jobState: {
-//   type, groupId, taskId?,
+//   type, groupId, taskId?, taskName?,
 //   total, current, failed, skipped,
 //   status,             // 'running' | 'aborted' | 'completed' | 'failed'
 //   startedAt, lastTickAt, lastCurrent,
@@ -80,6 +80,7 @@ function emitV2(jobId) {
   const payload = {
     jobId,
     taskId: s.taskId,
+    taskName: s.taskName,
     type: s.type,
     groupId: s.groupId,
     current: s.current,
@@ -123,11 +124,12 @@ function recalcRate(jobId) {
  *  `abortController` is optional but required if you want stopJob to
  *  actually cancel the in-flight work.
  */
-function startJob({ jobId, type, groupId, taskId, total, abortController }) {
+function startJob({ jobId, type, groupId, taskId, taskName, total, abortController }) {
   const s = getOrInit(jobId, { type, groupId, taskId, total });
   s.type = type;
   s.groupId = groupId;
   s.taskId = taskId;
+  s.taskName = taskName;
   s.total = total;
   s.current = 0;
   s.failed = 0;

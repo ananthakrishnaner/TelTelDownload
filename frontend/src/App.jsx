@@ -6,6 +6,7 @@ import Settings from './pages/Settings';
 import MediaManager from './pages/MediaManager';
 import ActivityLog from './pages/ActivityLog';
 import ActiveJobs from './pages/ActiveJobs';
+import Scheduler from './pages/Scheduler';
 import ChannelDetail from './pages/ChannelDetail';
 import Sidebar from './components/Sidebar';
 import Toaster from './components/Toaster';
@@ -108,6 +109,7 @@ function AnimatedRoutes() {
           <Route path="/media" element={<ProtectedRoute><MediaManager /></ProtectedRoute>} />
           <Route path="/logs" element={<ProtectedRoute><ActivityLog /></ProtectedRoute>} />
           <Route path="/active-jobs" element={<ProtectedRoute><ActiveJobs /></ProtectedRoute>} />
+          <Route path="/scheduler" element={<ProtectedRoute><Scheduler /></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
         </Routes>
       </motion.div>

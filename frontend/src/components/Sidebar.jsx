@@ -1,5 +1,5 @@
 import { NavLink, useNavigate } from 'react-router-dom';
-import { FiHome, FiSettings, FiLogOut, FiImage, FiActivity, FiFileText } from 'react-icons/fi';
+import { FiHome, FiSettings, FiLogOut, FiImage, FiActivity, FiFileText, FiClock } from 'react-icons/fi';
 import useMediaQuery from '../hooks/useMediaQuery';
 import SessionPill from './SessionPill';
 
@@ -15,6 +15,7 @@ const SECTIONS = [
     items: [
       { to: '/media', label: 'Media Vault', icon: FiImage, accent: 'media' },
       { to: '/active-jobs', label: 'Active Jobs', icon: FiActivity, accent: 'jobs' },
+      { to: '/scheduler', label: 'Scheduler', icon: FiClock, accent: 'scheduler' },
       { to: '/logs', label: 'Audit Logs', icon: FiFileText, accent: 'logs' },
     ],
   },
