@@ -188,6 +188,34 @@ async function downloadAndMaybeUpload({ client, jobId, groupId, message, targetG
   const fileName = `${groupId}_${msgId}${ext}`;
   const filePath = path.join(downloadDir, fileName);
 
+  // ---- Filesystem pre-flight -------------------------------------------
+  // Before we even consult the DB, check whether the file is already on
+  // disk under any of the possible extensions. This catches orphans —
+  // files that exist locally but have no Media record (e.g. a partial
+  // DB, a previous install, or a manual copy). Telegram sometimes
+  // reports a different ext for the same media object (`.mp4` vs
+  // `.mov` vs `.bin`), so we test the canonical name plus common
+  // alternates. If we find one, log it and skip without ever opening
+  // a download stream.
+  if (fs.existsSync(filePath)) {
+    progressEmitter.fileSkipped(jobId, {
+      groupId, msgId, fileName, reason: 'Duplicate video detected · already on disk', telegramLink: link,
+    });
+    return { skipped: true };
+  }
+  // Common-extension fallbacks for the same msgId.
+  for (const alt of ['.mp4', '.mov', '.jpg', '.jpeg', '.png', '.webp', '.gif', '.bin', '.mkv', '.webm', '.avi', '.m4a', '.ogg', '.mp3']) {
+    const altPath = path.join(downloadDir, `${groupId}_${msgId}${alt}`);
+    if (altPath !== filePath && fs.existsSync(altPath)) {
+      progressEmitter.fileSkipped(jobId, {
+        groupId, msgId, fileName: path.basename(altPath),
+        reason: 'Duplicate video detected · already on disk',
+        telegramLink: link,
+      });
+      return { skipped: true };
+    }
+  }
+
   let existing = await Media.findOne({ telegramMessageId: msgId, channelId: groupId });
   const link = telegramLinkFor(groupId, msgId);
 
@@ -715,6 +743,7 @@ module.exports = {
   retryMediaItem,
   getActiveJobs: exports.getActiveJobs,
   stopJob: exports.stopJob,
+  stopAllJobs: exports.stopAllJobs,
   getSessionState: exports.getSessionState,
   reconnectNow: exports.reconnectNow,
 };
