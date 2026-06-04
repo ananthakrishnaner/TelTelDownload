@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { FiImage, FiVideo, FiSearch, FiCheck } from 'react-icons/fi';
+import { FiImage, FiVideo, FiSearch, FiCheck, FiAlertTriangle } from 'react-icons/fi';
 import api from '../services/api';
 import { toast } from '../hooks/useToast';
 import PageHeader from '../components/PageHeader';
@@ -261,12 +261,22 @@ export default function MediaManager() {
                   className="absolute inset-0"
                   aria-label="Open"
                 />
-                {isPhoto(item.fileName) ? (
+                {item.previewAvailable === false ? (
+                  // File is gone from disk (cleaned up after a forward,
+                  // or never landed in this volume). Show a clear
+                  // placeholder instead of a broken <img>.
+                  <div className="w-full h-full flex flex-col items-center justify-center text-slate-500 p-3 text-center bg-white/[0.02]">
+                    <FiAlertTriangle size={22} className="mb-1.5 text-amber-400/80" />
+                    <span className="text-[10px] font-mono uppercase tracking-widest text-amber-300/80">file missing</span>
+                    <span className="text-[9px] font-mono break-all text-slate-500 mt-1 line-clamp-2">{item.fileName}</span>
+                  </div>
+                ) : isPhoto(item.fileName) ? (
                   <img
                     src={`/media/${item.fileName}`}
                     alt={item.caption || ''}
                     className="w-full h-full object-cover pointer-events-none"
                     loading="lazy"
+                    onError={(e) => { e.currentTarget.style.display = 'none'; e.currentTarget.parentElement.dataset.broken = '1'; }}
                   />
                 ) : isVideo(item.fileName) ? (
                   <video
@@ -275,6 +285,7 @@ export default function MediaManager() {
                     muted
                     loop
                     playsInline
+                    onError={(e) => { e.currentTarget.style.display = 'none'; }}
                     onMouseOver={(e) => e.currentTarget.play()}
                     onMouseOut={(e) => { e.currentTarget.pause(); e.currentTarget.currentTime = 0; }}
                   />

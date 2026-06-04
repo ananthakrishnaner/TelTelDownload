@@ -12,10 +12,20 @@ exports.getMedia = async (req, res) => {
       .sort({ downloadedAt: -1 })
       .skip((page - 1) * limit)
       .limit(parseInt(limit));
-    
+
     const total = await Media.countDocuments(query);
 
-    res.json({ media, total, pages: Math.ceil(total / limit) });
+    // Mark each row with `previewAvailable: true/false` so the UI can
+    // show a placeholder for items whose file is gone (e.g. cleaned up
+    // after a forward to a target group, or stored on a different
+    // volume). Cheaper than making the browser probe every <img>.
+    const enriched = media.map((m) => {
+      const obj = m.toObject ? m.toObject() : m;
+      obj.previewAvailable = !!(m.localPath && fs.existsSync(m.localPath));
+      return obj;
+    });
+
+    res.json({ media: enriched, total, pages: Math.ceil(total / limit) });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

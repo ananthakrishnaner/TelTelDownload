@@ -1,14 +1,17 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { io } from 'socket.io-client';
-import { FiActivity, FiRefreshCw, FiAlertTriangle } from 'react-icons/fi';
+import {
+  FiActivity, FiRefreshCw, FiAlertTriangle, FiClock, FiCpu,
+  FiLink, FiPause, FiXCircle, FiDownload, FiUpload,
+  FiCheckCircle, FiZap,
+} from 'react-icons/fi';
 import api from '../services/api';
 import { toast } from '../hooks/useToast';
 import PageHeader from '../components/PageHeader';
 import Skeleton from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
 
-const EMA_ALPHA = 0.3;     // smoothing for throughput EMA (0..1, higher = more reactive)
-const SAMPLE_WINDOW = 30;  // throughput samples kept for the sparkline
+const SAMPLE_WINDOW = 30;   // throughput samples kept for the sparkline
 
 function Sparkline({ data, width = 600, height = 40 }) {
   if (data.length < 2) {
@@ -38,39 +41,55 @@ function Sparkline({ data, width = 600, height = 40 }) {
   );
 }
 
-function formatEta(seconds) {
-  if (!Number.isFinite(seconds) || seconds < 0) return '—';
-  if (seconds < 60) return `${Math.round(seconds)}s`;
-  if (seconds < 3600) {
-    const m = Math.floor(seconds / 60);
-    const s = Math.round(seconds % 60);
-    return `${m}m ${s}s`;
+function formatEta(ms) {
+  if (ms == null || !Number.isFinite(ms) || ms < 0) return '—';
+  const total = Math.round(ms / 1000);
+  if (total < 60) return `${total}s`;
+  if (total < 3600) {
+    const m = Math.floor(total / 60);
+    const s = total % 60;
+    return s ? `${m}m ${s}s` : `${m}m`;
   }
-  const h = Math.floor(seconds / 3600);
-  const m = Math.round((seconds % 3600) / 60);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
   return `${h}h ${m}m`;
+}
+
+function formatBytes(n) {
+  if (!n || n < 0) return '—';
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+
+function relTime(ts) {
+  if (!ts) return '—';
+  const dt = Math.max(0, (Date.now() - ts) / 1000);
+  if (dt < 60) return `${Math.round(dt)}s ago`;
+  if (dt < 3600) return `${Math.round(dt / 60)}m ago`;
+  if (dt < 86400) return `${Math.round(dt / 3600)}h ago`;
+  return new Date(ts).toLocaleString();
 }
 
 export default function ActiveJobs() {
   const [jobs, setJobs] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [throughput, setThroughput] = useState([]); // last N samples (files/sec EMA)
-  const [failedByJob, setFailedByJob] = useState({}); // jobId -> {count, names}
+  const [throughput, setThroughput] = useState([]);     // items/sec samples
+  const [activityByJob, setActivityByJob] = useState({}); // jobId -> [log entries]
   const [completedJobs, setCompletedJobs] = useState(new Set());
+  const [expanded, setExpanded] = useState(new Set());  // jobIds whose detail panel is open
 
   const socketRef = useRef(null);
-  const [ema, setEma] = useState(0);         // current throughput EMA (files/sec)
-  const lastTickRef = useRef({});            // jobId -> {progress, ts}
   const seenJobIds = useRef(new Set());
+  const lastTickRef = useRef({});  // jobId -> {progress, ts}
 
-  async function fetchJobs() {
+  // Fetch once and on demand
+  const fetchJobs = useCallback(async () => {
     try {
-      setLoading(true);
       const res = await api.get('/telegram/active-jobs');
       const incoming = res.data.jobs || [];
       setJobs(incoming);
-
-      // First-time seen → seed.
       incoming.forEach((j) => {
         if (!seenJobIds.current.has(j.id)) {
           seenJobIds.current.add(j.id);
@@ -82,135 +101,156 @@ export default function ActiveJobs() {
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
 
-  // Periodic "completion toast" sweep: detect jobs that disappeared.
+  // Initial load: pull jobs as soon as the component mounts, without
+  // putting fetchJobs into a dep array (the lint rule wants to avoid
+  // cascading renders from a setState in the effect body).
+  useEffect(() => { fetchJobs(); /* eslint-disable-line react-hooks/set-state-in-effect */ }, []); // mount-only
+
+  // Socket.IO wiring: job_progress_v2 is the canonical payload
   useEffect(() => {
-    const id = setInterval(() => {
-      // detect job completion by checking if a previously-seen job
-      // is no longer in `jobs`. To know which jobs are now missing,
-      // we compare current server response to last seen.
-      api.get('/telegram/active-jobs')
-        .then((res) => {
-          const currentIds = new Set((res.data.jobs || []).map((j) => j.id));
-          // For each job that was in `seenJobIds` but isn't in current,
-          // emit a completion toast — once.
-          for (const jid of Array.from(seenJobIds.current)) {
-            if (!currentIds.has(jid) && !completedJobs.has(jid)) {
-              const completed = new Set(completedJobs);
-              completed.add(jid);
-              setCompletedJobs(completed);
-              const j = jobs.find((x) => x.id === jid);
-              const failed = failedByJob[jid]?.count || 0;
-              const ok = j ? (j.progress - failed) : 0;
-              const desc = j
-                ? `${ok.toLocaleString()} downloaded · ${failed} failed · ${j.total.toLocaleString()} total`
-                : '';
-              if (failed > 0) {
-                toast.warning(`Job finished with ${failed} failures`, { description: desc });
-              } else {
-                toast.success('Job complete', { description: desc });
-              }
-            }
-          }
-        })
-        .catch(() => { /* ignore */ });
-    }, 3000);
-    return () => clearInterval(id);
-  }, [jobs, completedJobs, failedByJob]);
+    const sock = io(window.location.origin);
+    socketRef.current = sock;
 
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    fetchJobs();
-    socketRef.current = io(window.location.origin);
-
-    socketRef.current.on('job_progress', (data) => {
-      if (!data) return;
-      const { jobId, progress, total, failed, failedName, paused, done } = data;
+    sock.on('job_progress_v2', (p) => {
+      if (!p) return;
       const now = Date.now();
-      const last = lastTickRef.current[jobId] || { progress, ts: now };
+      const last = lastTickRef.current[p.jobId] || { progress: 0, ts: now };
       const dtSec = Math.max(0.001, (now - last.ts) / 1000);
-      const dProgress = Math.max(0, progress - last.progress);
-      // Instantaneous files/sec for this tick.
+      const dProgress = Math.max(0, p.current - last.progress);
       const inst = dProgress / dtSec;
-      // Update EMA (files/sec) via state so renders see the latest value.
-      setEma((prevEma) => (prevEma === 0 ? inst : (EMA_ALPHA * inst + (1 - EMA_ALPHA) * prevEma)));
+      lastTickRef.current[p.jobId] = { progress: p.current, ts: now };
 
-      // Sample for sparkline (rounded to 2 decimals).
+      // Items/sec for the global sparkline.
       setThroughput((prev) => {
         const next = [...prev, Math.round(inst * 100) / 100];
         return next.slice(-SAMPLE_WINDOW);
       });
 
-      lastTickRef.current[jobId] = { progress, ts: now };
-      setJobs((prev) => prev.map((j) => j.id === jobId
-        ? { ...j, progress, total: total ?? j.total, paused: paused ?? j.paused, done: done ?? j.done }
-        : j));
-
-      if (failed) {
-        setFailedByJob((prev) => {
-          const cur = prev[jobId] || { count: 0, names: [] };
-          return {
-            ...prev,
-            [jobId]: {
-              count: cur.count + (failed || 0),
-              names: failedName ? [...cur.names, failedName].slice(-5) : cur.names,
-            },
-          };
-        });
-      }
-    });
-
-    socketRef.current.on('progress', (data) => {
-      // Bulk progress events from progressEmitter.
-      if (!data) return;
-      if (typeof data.progress !== 'number') return;
-      setThroughput((prev) => {
-        const next = [...prev, data.progress];
-        return next.slice(-SAMPLE_WINDOW);
+      // Merge into the per-job view. The server now sends real numbers.
+      setJobs((prev) => {
+        const idx = prev.findIndex((j) => j.id === p.jobId);
+        const next = [...prev];
+        const merged = {
+          ...(idx >= 0 ? prev[idx] : {}),
+          id: p.jobId,
+          type: p.type || (idx >= 0 ? prev[idx].type : 'group_pull'),
+          groupId: p.groupId,
+          taskId: p.taskId,
+          status: p.status || (idx >= 0 ? prev[idx].status : 'running'),
+          progress: p.current,
+          total: p.total,
+          failed: p.failed,
+          skipped: p.skipped,
+          rate: p.rate,
+          etaMs: p.etaMs,
+          currentFile: p.currentFile,
+          startedAt: p.startedAt,
+        };
+        if (idx >= 0) next[idx] = merged; else next.push(merged);
+        return next;
       });
     });
 
-    return () => socketRef.current?.disconnect();
+    sock.on('job_log', (e) => {
+      if (!e) return;
+      setActivityByJob((prev) => {
+        const arr = prev[e.jobId] ? [...prev[e.jobId]] : [];
+        arr.push({ at: e.at, level: e.level, message: e.message, msgId: e.msgId, fileName: e.fileName, telegramLink: e.telegramLink, reason: e.reason });
+        const capped = arr.slice(-50);
+        return { ...prev, [e.jobId]: capped };
+      });
+    });
+
+    sock.on('progress', (data) => {
+      // Legacy per-file complete events. Mirror to the activity log.
+      if (!data) return;
+      if (data.type !== 'download_complete' && data.type !== 'upload_complete') return;
+      const jobId = jobs.find((j) => j.groupId === data.groupId)?.id;
+      if (!jobId) return;
+      setActivityByJob((prev) => {
+        const arr = prev[jobId] ? [...prev[jobId]] : [];
+        arr.push({ at: Date.now(), level: 'info', message: `${data.type} · ${data.fileName || ''}` });
+        return { ...prev, [jobId]: arr.slice(-50) };
+      });
+    });
+
+    sock.on('job_done', (d) => {
+      if (!d) return;
+      const failed = d.failed || 0;
+      const skipped = d.skipped || 0;
+      const ok = (d.current || 0) - failed;
+      const desc = `${ok.toLocaleString()} downloaded · ${failed} failed · ${skipped} skipped · ${d.total.toLocaleString()} total`;
+      if (d.status === 'aborted') {
+        toast.warning('Job stopped', { description: desc });
+      } else if (failed > 0) {
+        toast.warning(`Job finished with ${failed} failures`, { description: desc });
+      } else {
+        toast.success('Job complete', { description: desc });
+      }
+      setCompletedJobs((prev) => new Set(prev).add(d.jobId));
+      setJobs((prev) => prev.filter((j) => j.id !== d.jobId));
+    });
+
+    return () => sock.disconnect();
+    // jobs is referenced for legacy 'progress' groupId lookup only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Completion sweep as a backup (handles case where the server drops
+  // a job from the snapshot before the job_done event lands).
+  useEffect(() => {
+    const id = setInterval(async () => {
+      try {
+        const res = await api.get('/telegram/active-jobs');
+        const currentIds = new Set((res.data.jobs || []).map((j) => j.id));
+        for (const jid of Array.from(seenJobIds.current)) {
+          if (!currentIds.has(jid) && !completedJobs.has(jid)) {
+            setCompletedJobs((prev) => new Set(prev).add(jid));
+          }
+        }
+      } catch { /* ignore */ }
+    }, 5000);
+    return () => clearInterval(id);
+  }, [completedJobs]);
 
   const stopJob = async (id) => {
     try {
       await api.post(`/telegram/stop-job/${id}`);
-      toast.warning('Job stopped', { description: id.slice(0, 8) });
-      fetchJobs();
+      toast.warning('Stop requested', { description: id.slice(0, 8) });
     } catch (err) {
       toast.error('Stop failed', { description: err.message });
     }
   };
 
-  // Real ETA = remaining / EMA(files/sec).
-  const computed = useMemo(() => {
-    return jobs.map((j) => {
-      const remaining = Math.max(0, (j.total || 0) - (j.progress || 0));
-      const rate = Math.max(0.001, ema);
-      const etaSec = remaining / rate;
-      return {
-        id: j.id,
-        eta: j.progress === 0 ? '—' : formatEta(etaSec),
-        etaSec,
-        remaining,
-        ratePerSec: rate,
-        ratePerMin: rate * 60,
-      };
+  const toggleExpand = (id) => {
+    setExpanded((prev) => {
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id); else n.add(id);
+      return n;
     });
-  }, [jobs, ema]);
+  };
 
-  const totalQueued = jobs.reduce((a, j) => a + (j.total || 0), 0);
-  const totalDone = jobs.reduce((a, j) => a + (j.progress || 0), 0);
-  const totalFailed = Object.values(failedByJob).reduce((a, x) => a + x.count, 0);
+  const totals = useMemo(() => {
+    return jobs.reduce(
+      (acc, j) => ({
+        queued: acc.queued + (j.total || 0),
+        done: acc.done + (j.progress || 0),
+        failed: acc.failed + (j.failed || 0),
+        skipped: acc.skipped + (j.skipped || 0),
+        rate: acc.rate + (j.rate || 0),
+      }),
+      { queued: 0, done: 0, failed: 0, skipped: 0, rate: 0 },
+    );
+  }, [jobs]);
 
   return (
     <div className="p-6 md:p-10 max-w-[1400px] mx-auto pb-32 md:pb-12">
       <PageHeader
         eyebrow="Telemetry"
         title="Active Jobs"
-        description="Real-time throughput and control for all running transfers."
+        description="Real-time throughput, current files, and live activity log for every running transfer."
         accent="jobs"
         actions={
           <button
@@ -224,21 +264,24 @@ export default function ActiveJobs() {
       />
 
       {/* Throughput panel */}
-      <section className="surface-1 rounded-lg p-5 mb-8">
+      <section className="surface-1 rounded-lg p-5 mb-6">
         <div className="flex items-baseline justify-between mb-3">
           <p className="text-[10px] font-mono uppercase tracking-widest text-slate-500">
-            Throughput · last {SAMPLE_WINDOW} samples
+            Throughput · last {SAMPLE_WINDOW} samples (items/sec)
           </p>
           <p className="text-[10px] font-mono text-slate-500 tnum">
-            {jobs.length} active · {totalDone.toLocaleString()} / {totalQueued.toLocaleString()} files
-            {totalFailed > 0 && <span className="text-rose-400 ml-2">· {totalFailed} failed</span>}
+            {jobs.length} active · {totals.done.toLocaleString()} / {totals.queued.toLocaleString()} files
+            {totals.failed > 0 && <span className="text-rose-400 ml-2">· {totals.failed} failed</span>}
+            {totals.skipped > 0 && <span className="text-amber-400 ml-2">· {totals.skipped} skipped</span>}
           </p>
         </div>
         <Sparkline data={throughput} />
-        <div className="grid grid-cols-3 gap-4 mt-4 pt-4 border-t border-[var(--color-hairline)]">
-          <Stat label="EMA rate" value={ema ? `${ema.toFixed(2)}/s` : '—'} subtext={ema ? `~ ${formatEta(60 / Math.max(0.001, ema))} for 60 files` : ''} />
-          <Stat label="Per minute" value={ema ? `~ ${Math.round(ema * 60).toLocaleString()}` : '—'} subtext="smoothed" />
-          <Stat label="Total failed" value={totalFailed.toLocaleString()} subtext="across all jobs" accent={totalFailed > 0 ? 'rose' : 'slate'} />
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mt-4 pt-4 border-t border-[var(--color-hairline)]">
+          <Stat icon={FiZap} label="Sum rate" value={totals.rate ? `${totals.rate.toFixed(2)}/s` : '—'} subtext={totals.rate ? `~ ${Math.round(totals.rate * 60)}/min` : ''} />
+          <Stat icon={FiDownload} label="Done" value={totals.done.toLocaleString()} subtext={`of ${totals.queued.toLocaleString()}`} />
+          <Stat icon={FiAlertTriangle} label="Failed" value={totals.failed.toLocaleString()} accent={totals.failed > 0 ? 'rose' : 'slate'} />
+          <Stat icon={FiPause} label="Skipped" value={totals.skipped.toLocaleString()} accent={totals.skipped > 0 ? 'amber' : 'slate'} />
+          <Stat icon={FiClock} label="ETA (sum)" value={formatEta(totals.rate > 0 ? ((totals.queued - totals.done) / totals.rate * 1000) : null)} />
         </div>
       </section>
 
@@ -258,29 +301,54 @@ export default function ActiveJobs() {
           {jobs.map((job) => {
             const pct = job.total > 0 ? Math.round((job.progress / job.total) * 100) : 0;
             const isUpload = job.type === 'bulk_upload';
-            const meta = computed.find((c) => c.id === job.id) || {};
-            const failed = failedByJob[job.id] || { count: 0, names: [] };
+            const isOpen = expanded.has(job.id);
+            const remaining = Math.max(0, (job.total || 0) - (job.progress || 0));
+            const eta = job.etaMs != null ? job.etaMs : (job.rate > 0 ? (remaining / job.rate) * 1000 : null);
+            const activity = activityByJob[job.id] || [];
+
             return (
               <div key={job.id} className="surface-1 rounded-lg p-5 relative overflow-hidden">
+                {/* Top status row */}
                 <div className="flex flex-col md:flex-row md:items-center gap-4 mb-3">
                   <div className="flex items-center gap-2 shrink-0">
-                    <span className="relative flex h-2 w-2">
-                      <span className={`absolute inline-flex h-full w-full rounded-full opacity-60 animate-ping ${isUpload ? 'bg-emerald-400' : 'bg-sky-400'}`} />
-                      <span className={`relative inline-flex h-2 w-2 rounded-full ${isUpload ? 'bg-emerald-400' : 'bg-sky-400'}`} />
+                    {job.status === 'aborted' ? (
+                      <FiXCircle className="text-rose-400" size={14} />
+                    ) : isUpload ? (
+                      <FiUpload className="text-emerald-400" size={14} />
+                    ) : (
+                      <FiDownload className="text-sky-400" size={14} />
+                    )}
+                    <span className={`text-[10px] font-mono uppercase tracking-widest ${
+                      job.status === 'aborted' ? 'text-rose-400'
+                        : isUpload ? 'text-emerald-400' : 'text-sky-400'
+                    }`}>
+                      {job.status === 'aborted' ? 'Aborted'
+                        : isUpload ? 'Uploading' : 'Downloading'}
                     </span>
-                    <span className={`text-[10px] font-mono uppercase tracking-widest ${isUpload ? 'text-emerald-400' : 'text-sky-400'}`}>
-                      {isUpload ? 'Uploading' : 'Downloading'}
-                    </span>
+                    {job.status === 'running' && (
+                      <span className="relative flex h-1.5 w-1.5 ml-1">
+                        <span className={`absolute inline-flex h-full w-full rounded-full opacity-60 animate-ping ${isUpload ? 'bg-emerald-400' : 'bg-sky-400'}`} />
+                        <span className={`relative inline-flex h-1.5 w-1.5 rounded-full ${isUpload ? 'bg-emerald-400' : 'bg-sky-400'}`} />
+                      </span>
+                    )}
                   </div>
+
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm text-slate-200">
-                      <span className="font-mono text-xs text-slate-500 mr-2">grp:{job.groupId}</span>
+                    <p className="text-sm text-slate-200 flex flex-wrap items-center gap-x-3 gap-y-0.5">
+                      <span className="font-mono text-xs text-slate-500">grp:{job.groupId}</span>
                       <span className="text-xs text-slate-500 font-mono">job:{job.id.slice(0, 8)}</span>
+                      {job.taskId && (
+                        <span className="text-[10px] font-mono text-indigo-300 bg-indigo-500/10 ring-1 ring-indigo-500/20 px-1.5 py-0.5 rounded inline-flex items-center gap-1">
+                          <FiCpu size={9} /> scheduled
+                        </span>
+                      )}
                     </p>
                     <p className="text-[10px] font-mono text-slate-500 mt-0.5">
-                      {meta.ratePerSec ? `${meta.ratePerSec.toFixed(2)}/s` : '—'} · {meta.ratePerMin ? `~${Math.round(meta.ratePerMin)}/min` : '—'}
+                      started {new Date(job.startedAt).toLocaleTimeString()} ·
+                      {' '}elapsed {relTime(job.startedAt)}
                     </p>
                   </div>
+
                   <div className="text-right shrink-0">
                     <p className="font-display text-3xl font-light text-slate-100 tnum leading-none">
                       {pct}<span className="text-lg text-slate-500">%</span>
@@ -288,36 +356,75 @@ export default function ActiveJobs() {
                   </div>
                 </div>
 
-                <div className="h-1 bg-white/5 rounded-full overflow-hidden mb-2">
+                {/* Progress bar */}
+                <div className="h-1 bg-white/5 rounded-full overflow-hidden mb-3">
                   <div
-                    className={`h-full transition-all duration-500 bg-gradient-to-r ${isUpload ? 'from-emerald-500 to-sky-500' : 'from-sky-500 to-indigo-500'}`}
+                    className={`h-full transition-all duration-500 ${
+                      job.status === 'aborted'
+                        ? 'bg-rose-500/60'
+                        : isUpload
+                          ? 'bg-gradient-to-r from-emerald-500 to-sky-500'
+                          : 'bg-gradient-to-r from-sky-500 to-indigo-500'
+                    }`}
                     style={{ width: `${pct}%` }}
                   />
                 </div>
 
-                <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] font-mono text-slate-500 tnum">
-                  <span>{job.progress.toLocaleString()} / {job.total.toLocaleString()} files</span>
-                  <span>eta: {meta.eta || '—'}</span>
-                  <span>started {new Date(job.startedAt).toLocaleTimeString()}</span>
-                  <button
-                    onClick={() => stopJob(job.id)}
-                    className="text-rose-400 hover:text-rose-300 transition-colors uppercase tracking-widest"
-                  >
-                    [ stop ]
-                  </button>
+                {/* Stats grid */}
+                <div className="grid grid-cols-2 md:grid-cols-6 gap-3 text-[10px] font-mono text-slate-400 tnum">
+                  <Mini label="Files"      value={`${job.progress.toLocaleString()} / ${job.total.toLocaleString()}`} />
+                  <Mini label="ETA"        value={formatEta(eta)} />
+                  <Mini label="Rate"       value={job.rate ? `${job.rate.toFixed(2)}/s` : '—'} sub={job.rate ? `~ ${Math.round(job.rate * 60)}/min` : ''} />
+                  <Mini label="Failed"     value={job.failed || 0}           accent={(job.failed || 0) > 0 ? 'rose' : 'slate'} />
+                  <Mini label="Skipped"    value={job.skipped || 0}          accent={(job.skipped || 0) > 0 ? 'amber' : 'slate'} />
+                  <Mini label="Remaining"  value={remaining.toLocaleString()} />
                 </div>
 
-                {/* Failed chips */}
-                {failed.count > 0 && (
-                  <div className="mt-3 pt-3 border-t border-[var(--color-hairline)] flex items-center gap-2 flex-wrap">
-                    <span className="inline-flex items-center gap-1 text-[10px] font-mono uppercase tracking-widest text-rose-400">
-                      <FiAlertTriangle size={10} /> {failed.count} failed
+                {/* Current file */}
+                {job.currentFile && job.status === 'running' && (
+                  <div className="mt-3 px-3 py-2 rounded bg-white/[0.03] border border-[var(--color-hairline)] flex items-center gap-3">
+                    <FiActivity className="text-sky-400 animate-pulse" size={12} />
+                    <span className="text-[10px] font-mono uppercase tracking-widest text-slate-500">now</span>
+                    <span className="text-xs font-mono text-slate-200 truncate flex-1 min-w-0">
+                      {job.currentFile.fileName || `msg ${job.currentFile.msgId}`}
                     </span>
-                    {failed.names.map((n, i) => (
-                      <span key={i} className="text-[10px] font-mono text-rose-300/80 bg-rose-500/10 ring-1 ring-rose-500/20 px-1.5 py-0.5 rounded">
-                        {n}
+                    <span className="text-[10px] font-mono text-slate-500 tnum">
+                      {formatBytes(job.currentFile.bytesPerSec)}/s
+                    </span>
+                  </div>
+                )}
+
+                {/* Action row */}
+                <div className="mt-3 flex items-center justify-between gap-3 flex-wrap">
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => toggleExpand(job.id)}
+                      className="text-[10px] font-mono uppercase tracking-widest text-slate-400 hover:text-slate-100 transition-colors"
+                    >
+                      {isOpen ? '[ hide activity ]' : `[ show activity · ${activity.length} ]`}
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    {job.status === 'running' && (
+                      <button
+                        onClick={() => stopJob(job.id)}
+                        className="text-[10px] font-mono uppercase tracking-widest text-rose-400 hover:text-rose-300 transition-colors inline-flex items-center gap-1"
+                      >
+                        <FiXCircle size={11} /> stop
+                      </button>
+                    )}
+                    {job.status === 'aborted' && (
+                      <span className="text-[10px] font-mono uppercase tracking-widest text-rose-400 inline-flex items-center gap-1">
+                        <FiPause size={11} /> aborted
                       </span>
-                    ))}
+                    )}
+                  </div>
+                </div>
+
+                {/* Activity panel (expandable) */}
+                {isOpen && (
+                  <div className="mt-3 pt-3 border-t border-[var(--color-hairline)]">
+                    <ActivityLog entries={activity} />
                   </div>
                 )}
               </div>
@@ -329,18 +436,77 @@ export default function ActiveJobs() {
   );
 }
 
-function Stat({ label, value, subtext, accent = 'slate' }) {
+function ActivityLog({ entries }) {
+  if (entries.length === 0) {
+    return (
+      <p className="text-[10px] font-mono text-slate-500 py-2">
+        no activity yet — events appear here as the job runs
+      </p>
+    );
+  }
+  return (
+    <div className="max-h-72 overflow-y-auto rounded bg-black/30 ring-1 ring-[var(--color-hairline)]">
+      {entries.slice().reverse().map((e, i) => (
+        <div
+          key={i}
+          className={`flex items-start gap-2 px-3 py-1.5 text-[11px] font-mono border-b border-[var(--color-hairline)] last:border-b-0 ${
+            e.level === 'error' ? 'text-rose-300' :
+            e.level === 'warning' ? 'text-amber-300' :
+            'text-slate-300'
+          }`}
+        >
+          <span className="text-slate-500 shrink-0 w-16 tnum">{new Date(e.at).toLocaleTimeString()}</span>
+          {e.level === 'error' ? <FiAlertTriangle size={11} className="shrink-0 mt-0.5" />
+            : e.level === 'warning' ? <FiAlertTriangle size={11} className="shrink-0 mt-0.5" />
+            : <FiCheckCircle size={11} className="shrink-0 mt-0.5 text-slate-500" />}
+          <span className="flex-1 break-all min-w-0">{e.message}</span>
+          {e.telegramLink && (
+            <a
+              href={e.telegramLink}
+              target="_blank"
+              rel="noreferrer"
+              className="shrink-0 text-sky-400 hover:text-sky-200 inline-flex items-center gap-1"
+            >
+              <FiLink size={10} /> open
+            </a>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Stat({ icon: Icon, label, value, subtext, accent = 'slate' }) {
   const color = {
     slate: 'text-slate-100',
     rose: 'text-rose-300',
     emerald: 'text-emerald-300',
     sky: 'text-sky-300',
+    amber: 'text-amber-300',
   }[accent] || 'text-slate-100';
   return (
     <div>
-      <p className="text-[10px] font-mono uppercase tracking-widest text-slate-500">{label}</p>
+      <p className="text-[10px] font-mono uppercase tracking-widest text-slate-500 inline-flex items-center gap-1">
+        {Icon && <Icon size={10} />} {label}
+      </p>
       <p className={`text-2xl font-display font-light tnum mt-0.5 ${color}`}>{value}</p>
       {subtext && <p className="text-[10px] font-mono text-slate-500 mt-0.5">{subtext}</p>}
+    </div>
+  );
+}
+
+function Mini({ label, value, sub, accent = 'slate' }) {
+  const color = {
+    slate: 'text-slate-100',
+    rose: 'text-rose-300',
+    amber: 'text-amber-300',
+    emerald: 'text-emerald-300',
+  }[accent];
+  return (
+    <div>
+      <p className="text-[9px] font-mono uppercase tracking-widest text-slate-500">{label}</p>
+      <p className={`text-sm font-mono tnum mt-0.5 ${color || 'text-slate-200'}`}>{value}</p>
+      {sub && <p className="text-[9px] font-mono text-slate-500 mt-0.5">{sub}</p>}
     </div>
   );
 }
