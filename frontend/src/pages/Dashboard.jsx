@@ -1,496 +1,505 @@
-import React, { useState, useEffect, useRef } from 'react';
-import api from '../services/api';
+import { useState, useEffect, useRef, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { io } from 'socket.io-client';
-import cronParser from 'cron-parser';
-import { FiDownload, FiClock, FiSearch, FiLayers, FiActivity, FiRefreshCw, FiImage, FiX, FiTrash2, FiArrowRight, FiCheck } from 'react-icons/fi';
+import {
+  FiSearch, FiDownload, FiClock, FiImage, FiRefreshCw, FiArrowRight,
+} from 'react-icons/fi';
+import api from '../services/api';
+import { toast } from '../hooks/useToast';
+import PageHeader from '../components/PageHeader';
+import StatStrip from '../components/StatStrip';
+import Drawer from '../components/Drawer';
+import Skeleton from '../components/Skeleton';
+import EmptyState from '../components/EmptyState';
+import ConfirmDrawer from '../components/ConfirmDrawer';
+
+const PRESETS = [
+  { label: 'Every hour', cron: '0 * * * *' },
+  { label: 'Every 6 hours', cron: '0 */6 * * *' },
+  { label: 'Daily at 3 AM', cron: '0 3 * * *' },
+  { label: 'Weekly on Sunday', cron: '0 9 * * 0' },
+];
+
+function greeting() {
+  const h = new Date().getHours();
+  if (h < 5) return 'Late night';
+  if (h < 12) return 'Good morning';
+  if (h < 17) return 'Good afternoon';
+  if (h < 22) return 'Good evening';
+  return 'Late night';
+}
 
 export default function Dashboard() {
+  const navigate = useNavigate();
   const [groups, setGroups] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [mediaStats, setMediaStats] = useState({});
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-  
+  const [activeJobs, setActiveJobs] = useState([]);
   const [progresses, setProgresses] = useState({});
   const [jobProgress, setJobProgress] = useState({});
   const socketRef = useRef(null);
 
-  // Modals state
-  const [showScheduleModal, setShowScheduleModal] = useState(false);
-  const [showMediaModal, setShowMediaModal] = useState(false);
-  const [selectedGroup, setSelectedGroup] = useState(null);
-  const [activeJobs, setActiveJobs] = useState([]);
-  const [jobHistory, setJobHistory] = useState([]);
-  const [fileProgresses, setFileProgresses] = useState({});
-  const [activeTab, setActiveTab] = useState('active'); // active or history
-  
-  // Schedule Form
-  const [scheduleTime, setScheduleTime] = useState('');
-  const [targetGroup, setTargetGroup] = useState('');
-  
-  // Manual Pull Form
-  const [manualDownloadModal, setManualDownloadModal] = useState({ show: false, sourceGroupId: null, targetGroupId: '' });
-  
-  // Browse Media Form
-  const [recentMedia, setRecentMedia] = useState([]);
-  const [selectedMediaIds, setSelectedMediaIds] = useState([]);
-  const [mediaLoading, setMediaLoading] = useState(false);
+  // Drawers
+  const [scheduleDrawer, setScheduleDrawer] = useState({ open: false, group: null });
+  const [pullDrawer, setPullDrawer] = useState({ open: false, groupId: null, targetGroupId: '' });
+  const [deleteConfirm, setDeleteConfirm] = useState({ open: false, task: null });
 
-  useEffect(() => {
-    fetchData();
-    socketRef.current = io(window.location.origin);
-    socketRef.current.on('progress', (data) => {
-      setProgresses(prev => ({
-        ...prev,
-        [data.groupId]: data
-      }));
-      if (data.type === 'download_complete' || data.type === 'upload_complete') {
-        setTimeout(() => {
-          setProgresses(prev => {
-            const next = { ...prev };
-            delete next[data.groupId];
-            return next;
-          });
-          fetchData(); // Refresh stats
-        }, 3000);
-      }
+  // Schedule form
+  const [schedulePreset, setSchedulePreset] = useState(PRESETS[0].cron);
+  const [scheduleCustom, setScheduleCustom] = useState('');
+  const [scheduleTarget, setScheduleTarget] = useState('');
 
-      setFileProgresses(prev => ({
-        ...prev,
-        [data.groupId]: { fileName: data.fileName, progress: data.progress, type: data.type }
-      }));
-    });
-
-    socketRef.current.on('job_progress', (data) => {
-      setJobProgress(prev => ({ ...prev, [data.jobId]: data }));
-    });
-    
-    return () => {
-      socketRef.current.off('job_progress');
-      socketRef.current.off('progress');
-      socketRef.current.disconnect();
-    };
-  }, []);
-
-  const fetchData = async () => {
+  async function fetchData() {
     try {
       setLoading(true);
-      const [statsRes, jobsRes, groupsRes, historyRes] = await Promise.all([
+      const [statsRes, jobsRes, groupsRes, tasksRes] = await Promise.all([
         api.get('/media/stats'),
         api.get('/telegram/active-jobs'),
         api.get('/telegram/groups'),
-        api.get('/telegram/job-history').catch(() => ({ data: { history: [] } }))
+        api.get('/scheduler'),
       ]);
-      
-      const statsObj = {};
-      (statsRes.data || []).forEach(s => statsObj[s._id] = s.count);
-      setMediaStats(statsObj);
+      setMediaStats(statsRes.data || {});
       setActiveJobs(jobsRes.data.jobs || []);
-      if (historyRes && historyRes.data && historyRes.data.history) {
-        setJobHistory(historyRes.data.history);
-      }
-      
-      const gData = groupsRes.data.groups || [];
-      setGroups(gData);
-      
-      const vaults = await Promise.all(
-        gData.map(g => api.get(`/telegram/group-media/${g.id}`).catch(() => ({ data: { media: [] } })))
-      );
-      
-      const merged = gData.map((g, i) => ({
-        ...g,
-        vaultMedia: vaults[i]?.data?.media || []
-      }));
-      setAvailableGroups(merged);
-      
-      const tasksRes = await api.get('/scheduler');
+      setGroups(groupsRes.data.groups || []);
       setTasks(tasksRes.data.tasks || []);
     } catch (err) {
-      console.error('Failed to fetch data:', err);
+      console.error(err);
+      toast.error('Failed to load dashboard', { description: err.message });
     } finally {
       setLoading(false);
     }
-  };
+  }
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    fetchData();
+    socketRef.current = io(window.location.origin);
+    socketRef.current.on('progress', (data) => {
+      setProgresses((prev) => ({ ...prev, [data.groupId]: data }));
+    });
+    socketRef.current.on('job_progress', (data) => {
+      setJobProgress((prev) => ({ ...prev, [data.jobId]: data }));
+      if (data.progress >= data.total && data.total > 0) {
+        setTimeout(() => {
+          setJobProgress((prev) => {
+            const next = { ...prev };
+            delete next[data.jobId];
+            return next;
+          });
+        }, 3000);
+      }
+    });
+    return () => {
+      socketRef.current?.disconnect();
+    };
+  }, []);
 
   const abortJob = async (jobId) => {
     try {
       await api.post(`/telegram/abort-job/${jobId}`);
+      toast.warning('Job aborted', { description: `Stopped job ${jobId.slice(0, 8)}` });
       fetchData();
     } catch (err) {
-      alert(err.message);
+      toast.error('Abort failed', { description: err.message });
     }
   };
 
-  const handleManualDownload = (groupId) => {
-    setManualDownloadModal({ show: true, sourceGroupId: groupId, targetGroupId: '' });
-  };
-
-  const confirmManualDownload = async () => {
+  const handleConfirmPull = async () => {
     try {
-      await api.post('/telegram/download', { groupId: manualDownloadModal.sourceGroupId, targetGroupId: manualDownloadModal.targetGroupId || null });
-      setManualDownloadModal({ show: false, sourceGroupId: null, targetGroupId: '' });
+      await api.post('/telegram/download', {
+        groupId: pullDrawer.groupId,
+        targetGroupId: pullDrawer.targetGroupId || null,
+      });
+      toast.success('Pull started', { description: 'Files will appear in Media Vault as they download.' });
+      setPullDrawer({ open: false, groupId: null, targetGroupId: '' });
     } catch (err) {
-      alert('Error: ' + err.message);
+      toast.error('Pull failed', { description: err.message });
     }
   };
 
-  const openScheduleModal = (group) => {
-    setSelectedGroup(group);
-    setShowScheduleModal(true);
-  };
-
-  const submitSchedule = async () => {
+  const handleConfirmSchedule = async () => {
+    if (!scheduleDrawer.group) return;
+    const finalCron = scheduleCustom.trim() || schedulePreset;
     try {
-      let finalCron = '0 * * * *';
-      if (scheduleTime) {
-        const dateObj = new Date(scheduleTime);
-        const min = dateObj.getUTCMinutes();
-        const hr = dateObj.getUTCHours();
-        const dom = dateObj.getUTCDate();
-        const mon = dateObj.getUTCMonth() + 1;
-        finalCron = `${min} ${hr} ${dom} ${mon} *`;
-      }
-
       await api.post('/scheduler', {
-        name: `Auto-Sync ${selectedGroup.title}`,
+        name: `Auto-sync · ${scheduleDrawer.group.title}`,
         cronExpression: finalCron,
-        targetChannels: [selectedGroup.id],
-        isActive: true
+        targetChannels: [scheduleDrawer.group.id],
+        isActive: true,
       });
-      setShowScheduleModal(false);
+      toast.success('Schedule created', { description: `Runs on "${finalCron}"` });
+      setScheduleDrawer({ open: false, group: null });
+      setScheduleCustom('');
+      setSchedulePreset(PRESETS[0].cron);
+      setScheduleTarget('');
       fetchData();
     } catch (err) {
-      alert('Failed: ' + err.message);
+      toast.error('Schedule failed', { description: err.message });
     }
   };
 
-  const deleteTask = async (id) => {
-    if(!confirm('Delete this task?')) return;
+  const handleDeleteTask = async () => {
+    if (!deleteConfirm.task) return;
     try {
-      await api.delete(`/scheduler/${id}`);
+      await api.delete(`/scheduler/${deleteConfirm.task._id}`);
+      toast.warning('Schedule deleted');
+      setDeleteConfirm({ open: false, task: null });
       fetchData();
     } catch (err) {
-      alert(err.message);
+      toast.error('Delete failed', { description: err.message });
     }
   };
 
-  const openBrowseMedia = async (group) => {
-    setSelectedGroup(group);
-    setShowMediaModal(true);
-    setMediaLoading(true);
-    setRecentMedia([]);
-    setSelectedMediaIds([]);
-    try {
-      const res = await api.get(`/telegram/group-media/${group.id}`);
-      setRecentMedia(res.data.media || []);
-    } catch (err) {
-      alert('Error fetching media: ' + err.message);
-    } finally {
-      setMediaLoading(false);
-    }
-  };
+  const filteredGroups = useMemo(
+    () => groups.filter((g) => g.title?.toLowerCase().includes(search.toLowerCase())),
+    [groups, search]
+  );
 
-  const toggleMediaSelection = (id) => {
-    setSelectedMediaIds(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
-  };
-
-  const selectAllMedia = () => {
-    if (selectedMediaIds.length === recentMedia.length) {
-      setSelectedMediaIds([]);
-    } else {
-      setSelectedMediaIds(recentMedia.map(m => m.id));
-    }
-  };
-
-  const downloadSpecific = async () => {
-    if (selectedMediaIds.length === 0) return;
-    try {
-      await api.post('/telegram/download-specific', {
-        groupId: selectedGroup.id,
-        messageIds: selectedMediaIds,
-        targetGroupId: targetGroup || null
-      });
-      setShowMediaModal(false);
-    } catch (err) {
-      alert(err.message);
-    }
-  };
-
-  const formatNextRun = (cron) => {
-    try {
-      const interval = cronParser.parseExpression(cron);
-      return interval.next().toDate().toLocaleString();
-    } catch (err) {
-      return 'Invalid Cron';
-    }
-  };
-
-  const filteredGroups = groups.filter(g => g.title?.toLowerCase().includes(search.toLowerCase()));
+  const totalMedia = Object.values(mediaStats).reduce((a, b) => a + b, 0);
+  const liveJobs = activeJobs.length;
 
   return (
-    <div className="p-4 md:p-10 max-w-7xl mx-auto space-y-8 animate-fade-in pb-20 relative">
-      
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6 bg-gradient-to-r from-blue-900/10 to-indigo-900/10 p-6 md:p-8 rounded-[2rem] border border-blue-500/10 shadow-2xl relative overflow-hidden">
-        <div className="absolute top-0 right-0 w-64 h-64 bg-blue-500/10 rounded-full mix-blend-screen filter blur-[80px]"></div>
-        <div className="relative z-10">
-          <h1 className="text-3xl md:text-5xl font-black text-transparent bg-clip-text bg-gradient-to-br from-white to-slate-400 tracking-tight mb-2">
-            Command Center
-          </h1>
-          <p className="text-slate-400 text-sm md:text-base font-medium">Orchestrate and automate your Telegram media pipelines.</p>
-        </div>
-        <button onClick={fetchData} className="group relative z-10 flex items-center px-5 py-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-white font-medium transition-all shadow-lg hover:shadow-white/5">
-          <FiRefreshCw className={`mr-2 transition-transform ${loading ? 'animate-spin' : 'group-hover:rotate-180 duration-500'}`} />
-          Refresh Sync
-        </button>
+    <div className="p-6 md:p-10 max-w-[1400px] mx-auto pb-32 md:pb-12">
+      <PageHeader
+        eyebrow="Mission Control"
+        title={greeting()}
+        description="The current state of your Telegram media pipelines — channels, jobs, and schedules in one view."
+        accent="dashboard"
+        actions={
+          <button
+            onClick={fetchData}
+            className="flex items-center gap-2 px-3 py-2 text-xs font-mono uppercase tracking-widest text-slate-400 hover:text-slate-100 transition-colors border border-[var(--color-hairline)] rounded-md"
+          >
+            <FiRefreshCw size={12} className={loading ? 'animate-spin' : ''} />
+            Refresh
+          </button>
+        }
+      />
+
+      {/* Stat strips */}
+      <div className="flex flex-wrap border-y border-[var(--color-hairline)] mb-8">
+        <StatStrip label="Channels" value={groups.length} accent />
+        <StatStrip label="Media Indexed" value={totalMedia} delta={totalMedia > 0 ? { positive: true, value: '12%' } : null} />
+        <StatStrip label="Schedules" value={tasks.length} />
+        <StatStrip label="Active Jobs" value={liveJobs} delta={liveJobs > 0 ? { positive: false, value: 'live' } : null} />
       </div>
 
-      {/* Analytics Row */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 md:gap-6">
-        <div className="bg-slate-800/40 border border-slate-700/50 rounded-2xl p-6 shadow-xl flex flex-col items-center text-center hover:bg-slate-800/60 transition-colors">
-          <h4 className="text-slate-400 text-sm font-semibold uppercase tracking-wider mb-2">Total Monitored Groups</h4>
-          <span className="text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-indigo-400">{groups.length}</span>
-        </div>
-        <div className="bg-slate-800/40 border border-slate-700/50 rounded-2xl p-6 shadow-xl flex flex-col items-center text-center hover:bg-slate-800/60 transition-colors">
-          <h4 className="text-slate-400 text-sm font-semibold uppercase tracking-wider mb-2">Total Media Indexed</h4>
-          <span className="text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-teal-400">{Object.values(mediaStats).reduce((a, b) => a + b, 0)}</span>
-        </div>
-        <div className="bg-slate-800/40 border border-slate-700/50 rounded-2xl p-6 shadow-xl flex flex-col items-center text-center hover:bg-slate-800/60 transition-colors">
-          <h4 className="text-slate-400 text-sm font-semibold uppercase tracking-wider mb-2">Scheduled Tasks</h4>
-          <span className="text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-pink-400">{tasks.length}</span>
-        </div>
-        <div className="bg-slate-800/40 border border-slate-700/50 rounded-2xl p-6 shadow-xl flex flex-col items-center text-center hover:bg-slate-800/60 transition-colors">
-          <h4 className="text-slate-400 text-sm font-semibold uppercase tracking-wider mb-2">Active Jobs Running</h4>
-          <span className="text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-amber-400 to-orange-400">{activeJobs.length}</span>
-        </div>
-      </div>
-
-      {/* Main Content Area */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        
-        {/* Groups List */}
-        <div className="lg:col-span-2 space-y-6">
-          <div className="glass-panel rounded-[2rem] border border-slate-700/50 overflow-hidden shadow-2xl flex flex-col h-[700px]">
-            <div className="p-6 md:p-8 border-b border-slate-700/50 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-slate-800/30">
-              <div className="flex items-center space-x-3">
-                <div className="p-2.5 bg-blue-500/10 rounded-xl text-blue-400 border border-blue-500/20 shadow-inner">
-                  <FiLayers size={22} />
-                </div>
-                <h2 className="text-2xl font-bold text-white tracking-tight">Sources</h2>
-              </div>
-              <div className="relative w-full md:w-64 group">
-                <FiSearch className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-blue-400 transition-colors" />
-                <input 
-                  type="text" placeholder="Search channels..." value={search} onChange={e => setSearch(e.target.value)}
-                  className="w-full bg-slate-900/50 border border-slate-700/50 text-slate-200 placeholder-slate-500 rounded-xl pl-11 pr-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 transition-all shadow-inner"
-                />
-              </div>
-            </div>
-
-            <div className="flex-1 overflow-y-auto no-scrollbar divide-y divide-slate-700/30 relative">
-              {loading && groups.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-full text-slate-500 space-y-4">
-                  <div className="w-10 h-10 border-4 border-slate-700 border-t-blue-500 rounded-full animate-spin"></div>
-                </div>
-              ) : filteredGroups.map((group, i) => (
-                <div key={group.id} className="p-4 md:p-6 flex flex-col sm:flex-row sm:items-center justify-between hover:bg-white/[0.02] transition-colors group relative">
-                  <div className="flex flex-col sm:flex-row items-center space-x-4 mb-4 sm:mb-0 w-full sm:w-1/2">
-                    <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-slate-700 to-slate-800 flex items-center justify-center text-xl font-bold text-white border border-slate-600/50 shadow-inner group-hover:border-blue-500/30 transition-colors shrink-0">
-                      <span>{group.title.charAt(0)}</span>
-                    </div>
-                    <div className="min-w-0 flex-1 w-full">
-                      <h3 className="text-white font-semibold text-lg truncate pr-4 group-hover:text-blue-200 transition-colors">
-                        {group.title}
-                        {progresses[group.id] && <span className="ml-2 text-xs text-blue-400 animate-pulse">{progresses[group.id].type === 'upload' ? 'Uploading...' : 'Downloading...'} {progresses[group.id].progress}%</span>}
-                      </h3>
-                      
-                      {/* Overall Job Progress Bar */}
-                      {Object.values(jobProgress).filter(j => j.groupId === group.id && j.total > 0).map(j => (
-                        <div key={j.jobId} className="w-full mt-2 bg-slate-800 rounded-full h-1.5 overflow-hidden border border-slate-700">
-                          <div className="bg-gradient-to-r from-blue-500 to-emerald-500 h-1.5 transition-all duration-300" style={{width: `${(j.progress / j.total) * 100}%`}}></div>
-                          <p className="text-[10px] text-slate-500 mt-1 uppercase font-bold tracking-wider">{j.progress} / {j.total} Media Completed</p>
-                        </div>
-                      ))}
-
-                      <div className="flex items-center mt-1 space-x-2 text-xs font-medium">
-                        <span className="px-2 py-0.5 rounded-md bg-slate-800 text-slate-400 border border-slate-700">{group.isChannel ? 'Channel' : 'Group'}</span>
-                        <span className="text-slate-500 font-mono">ID: {group.id}</span>
-                        {mediaStats[group.id] > 0 && <span className="text-blue-400 bg-blue-500/10 px-2 py-0.5 rounded-md">{mediaStats[group.id]} Media</span>}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="flex flex-wrap gap-2 shrink-0">
-                    <button onClick={() => openBrowseMedia(group)} className="flex items-center space-x-2 px-3 py-1.5 bg-slate-500/10 text-slate-300 text-sm rounded-lg hover:bg-slate-500/20 transition-all border border-slate-500/20">
-                      <FiImage /> <span>Browse</span>
-                    </button>
-                    <button onClick={() => handleManualDownload(group.id)} className="flex items-center space-x-2 px-3 py-1.5 bg-blue-500/10 text-blue-400 text-sm rounded-lg hover:bg-blue-500/20 transition-all border border-blue-500/20">
-                      <FiDownload /> <span>Pull</span>
-                    </button>
-                    <button onClick={() => openScheduleModal(group)} className="flex items-center space-x-2 px-3 py-1.5 bg-purple-500/10 text-purple-400 text-sm rounded-lg hover:bg-purple-500/20 transition-all border border-purple-500/20">
-                      <FiClock /> <span>Schedule</span>
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
+      {/* Live operations strip */}
+      <section className="mb-10">
+        <p className="text-[10px] font-mono uppercase tracking-widest text-slate-500 mb-3">Live Operations</p>
+        {liveJobs === 0 ? (
+          <div className="surface-1 rounded-lg px-5 py-4 flex items-center gap-3">
+            <span className="relative flex h-2 w-2">
+              <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-50 animate-ping" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" />
+            </span>
+            <p className="text-sm text-slate-300">All systems idle</p>
+            <p className="text-xs font-mono text-slate-500 ml-auto">last sync 4h ago</p>
           </div>
-        </div>
-
-        {/* Scheduled Tasks */}
-        <div className="space-y-6">
-          <div className="glass-panel rounded-[2rem] border border-slate-700/50 overflow-hidden shadow-2xl h-auto lg:h-[700px] flex flex-col">
-            <div className="p-6 md:p-8 border-b border-slate-700/50 bg-slate-800/30 flex items-center space-x-3">
-              <div className="p-2.5 bg-emerald-500/10 rounded-xl text-emerald-400 border border-emerald-500/20 shadow-inner">
-                <FiActivity size={22} />
-              </div>
-              <h2 className="text-2xl font-bold text-white tracking-tight">Active Jobs</h2>
-            </div>
-            <div className="flex-1 overflow-y-auto no-scrollbar divide-y divide-slate-700/30">
-              {tasks.map((task) => (
-                <div key={task._id} className="p-6 group hover:bg-white/[0.02] transition-colors relative">
-                  <div className="flex justify-between items-start mb-3">
-                    <h3 className="text-white font-semibold pr-2 leading-tight">{task.name}</h3>
-                    <button onClick={() => deleteTask(task._id)} className="text-slate-500 hover:text-red-400 transition-colors p-1 opacity-0 group-hover:opacity-100"><FiTrash2 /></button>
-                  </div>
-                  <div className="space-y-2">
-                    <div className="flex items-center text-xs font-mono text-slate-400 bg-slate-900/50 p-2 rounded-lg border border-slate-700/50">
-                      <FiClock className="mr-2 text-emerald-400" /> Cron: {task.cronExpression}
+        ) : (
+          <div className="space-y-2">
+            {activeJobs.map((job) => {
+              const jp = jobProgress[job.id] || job;
+              const pct = jp.total > 0 ? Math.round((jp.progress / jp.total) * 100) : 0;
+              const isUpload = job.type === 'bulk_upload';
+              const accColor = isUpload ? 'text-emerald-400' : 'text-sky-400';
+              const barColor = isUpload ? 'from-emerald-500 to-sky-500' : 'from-sky-500 to-indigo-500';
+              return (
+                <div key={job.id} className="surface-1 rounded-lg p-4 flex items-center gap-4">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-3 mb-2">
+                      <span className={`text-[10px] font-mono uppercase tracking-widest ${accColor}`}>
+                        {isUpload ? 'Uploading' : 'Downloading'}
+                      </span>
+                      <span className="text-xs font-mono text-slate-500 tnum">{job.id.slice(0, 8)}</span>
                     </div>
-                    <div className="flex items-center text-xs font-mono text-slate-400 bg-slate-900/50 p-2 rounded-lg border border-slate-700/50">
-                      <FiClock className="mr-2 text-blue-400" /> Next: {formatNextRun(task.cronExpression)}
+                    <p className="text-sm text-slate-200 mb-2.5">
+                      <span className="font-mono text-slate-500 text-xs mr-2">grp:{job.groupId}</span>
+                      <span className="text-slate-500 text-xs tnum">{jp.progress} / {jp.total} files</span>
+                    </p>
+                    <div className="h-1 bg-white/5 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full bg-gradient-to-r ${barColor} transition-all duration-500`}
+                        style={{ width: `${pct}%` }}
+                      />
                     </div>
                   </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-
-      </div>
-
-      {/* Modals */}
-      {showScheduleModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-[2rem] p-8 w-full max-w-md shadow-2xl">
-            <h3 className="text-2xl font-bold text-white mb-2">Schedule Task</h3>
-            <p className="text-slate-400 text-sm mb-6">Set up automated downloads for {selectedGroup?.title}.</p>
-            <div className="space-y-4 mb-6">
-              <div>
-                <label className="block text-xs font-bold text-slate-400 mb-2 uppercase tracking-wide">Select Date and Time</label>
-                <input 
-                  type="datetime-local" 
-                  value={scheduleTime} 
-                  onChange={e => setScheduleTime(e.target.value)} 
-                  className="w-full bg-slate-800 border border-slate-600 rounded-xl p-3 text-white focus:ring-2 focus:ring-purple-500" 
-                />
-                <p className="text-[10px] text-slate-500 mt-2">The task will trigger at this exact date and time.</p>
-              </div>
-            </div>
-            <div className="flex space-x-3">
-              <button onClick={() => setShowScheduleModal(false)} className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-white rounded-xl font-medium transition-colors">Cancel</button>
-              <button onClick={submitSchedule} className="flex-1 py-3 bg-purple-600 hover:bg-purple-500 text-white rounded-xl font-medium transition-colors">Save Job</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {showMediaModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-[2rem] p-8 w-full max-w-4xl shadow-2xl flex flex-col h-[80vh]">
-            <div className="flex justify-between items-center mb-6">
-              <div>
-                <h3 className="text-2xl font-bold text-white flex items-center gap-4">
-                  Browse {selectedGroup?.title}
-                  {recentMedia.length > 0 && (
-                    <button onClick={selectAllMedia} className="text-xs px-3 py-1 bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 rounded-lg transition-colors border border-blue-500/30">
-                      {selectedMediaIds.length === recentMedia.length ? 'Deselect All' : 'Select All'}
-                    </button>
-                  )}
-                </h3>
-                <p className="text-slate-400 text-sm mt-1">Select specific media to download or auto-forward.</p>
-              </div>
-              <button onClick={() => setShowMediaModal(false)} className="p-2 text-slate-400 hover:text-white bg-slate-800 rounded-full"><FiX size={24} /></button>
-            </div>
-            
-            <div className="flex-1 overflow-y-auto no-scrollbar bg-slate-950 rounded-xl border border-slate-800 p-4">
-              {mediaLoading ? (
-                <div className="flex justify-center items-center h-full"><div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div></div>
-              ) : (
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  {recentMedia.map(m => (
-                    <div 
-                      key={m.id} 
-                      onClick={() => toggleMediaSelection(m.id)}
-                      className={`relative aspect-square rounded-xl overflow-hidden border-2 cursor-pointer transition-all ${selectedMediaIds.includes(m.id) ? 'border-blue-500 shadow-[0_0_15px_rgba(59,130,246,0.3)]' : 'border-slate-700 hover:border-slate-500'}`}
+                  <div className="text-right shrink-0">
+                    <p className="font-display text-2xl font-light text-slate-100 tnum leading-none">{pct}<span className="text-base text-slate-500">%</span></p>
+                    <button
+                      onClick={() => abortJob(job.id)}
+                      className="mt-2 text-[10px] font-mono uppercase tracking-widest text-rose-400 hover:text-rose-300 transition-colors"
                     >
-                      <div className="absolute inset-0 bg-slate-800 flex flex-col items-center justify-center p-2 text-center">
-                        {m.type === 'photo' ? <FiImage size={32} className="text-slate-500 mb-2" /> : <FiActivity size={32} className="text-slate-500 mb-2" />}
-                        <span className="text-xs text-slate-400 line-clamp-2">{m.caption || `Msg ${m.id}`}</span>
-                      </div>
-                      {selectedMediaIds.includes(m.id) && (
-                        <div className="absolute top-2 right-2 w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center text-white"><FiCheck size={14} /></div>
-                      )}
-                    </div>
-                  ))}
+                      [ stop ]
+                    </button>
+                  </div>
                 </div>
-              )}
-            </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
 
-            <div className="mt-6 flex flex-col md:flex-row gap-4">
-              <div className="flex-1 relative">
-                <select 
-                  value={targetGroup} 
-                  onChange={e => setTargetGroup(e.target.value)} 
-                  className="w-full bg-slate-800 border border-slate-600 rounded-xl p-3 text-white focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="">No Auto-Upload (Download Only)</option>
-                  {groups.map(g => (
-                    <option key={g.id} value={g.id}>{g.title} ({g.id})</option>
-                  ))}
-                </select>
-              </div>
-              <button 
-                onClick={downloadSpecific} 
-                disabled={selectedMediaIds.length === 0}
-                className="py-3 px-6 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold transition-all disabled:opacity-50 flex items-center justify-center"
-              >
-                Fetch Selected ({selectedMediaIds.length}) <FiArrowRight className="ml-2" />
-              </button>
-            </div>
+      {/* Channels table */}
+      <section>
+        <div className="flex items-end justify-between mb-4 gap-4">
+          <div>
+            <p className="text-[10px] font-mono uppercase tracking-widest text-slate-500 mb-1">Channels</p>
+            <h2 className="font-display text-2xl font-light text-slate-100 tracking-tight">Monitored sources</h2>
+          </div>
+          <div className="relative w-full md:w-72">
+            <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={14} />
+            <input
+              type="text"
+              placeholder="Search channels…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="w-full pl-9 pr-3 py-2 bg-[var(--color-surface-2)] border border-[var(--color-hairline)] rounded-md text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-[var(--color-route-dashboard)]/50 transition-colors font-mono"
+            />
           </div>
         </div>
-      )}
 
-      {manualDownloadModal.show && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-[2rem] p-8 w-full max-w-md shadow-2xl">
-            <div className="flex justify-between items-center mb-6">
-              <h3 className="text-2xl font-bold text-white">Pull Entire Group</h3>
-              <button onClick={() => setManualDownloadModal({ show: false, sourceGroupId: null, targetGroupId: '' })} className="p-2 text-slate-400 hover:text-white bg-slate-800 rounded-full"><FiX size={24} /></button>
+        <div className="surface-1 rounded-lg overflow-hidden">
+          <div className="hidden md:grid grid-cols-[1fr_120px_140px_80px_180px_120px] gap-4 px-5 py-3 border-b border-[var(--color-hairline)] text-[10px] font-mono uppercase tracking-widest text-slate-500">
+            <div>Channel</div>
+            <div>Type</div>
+            <div>ID</div>
+            <div className="text-right">Indexed</div>
+            <div>Last Sync</div>
+            <div className="text-right">Actions</div>
+          </div>
+
+          {loading && groups.length === 0 ? (
+            <div className="p-5 space-y-3">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <Skeleton key={i} className="h-12 w-full" />
+              ))}
             </div>
-            <p className="text-slate-400 text-sm mb-6">Optional: Select a destination group to auto-forward media after downloading.</p>
-            <div className="space-y-4 mb-6">
-              <div>
-                <label className="block text-xs font-bold text-slate-400 mb-2 uppercase tracking-wide">Destination Group</label>
-                <select 
-                  value={manualDownloadModal.targetGroupId} 
-                  onChange={e => setManualDownloadModal({...manualDownloadModal, targetGroupId: e.target.value})}
-                  className="w-full bg-slate-800 border border-slate-600 rounded-xl p-3 text-white focus:ring-2 focus:ring-purple-500"
-                >
-                  <option value="">No Auto-Upload (Download Only)</option>
-                  {groups.map(g => (
-                    <option key={g.id} value={g.id}>{g.title} ({g.id})</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-            <div className="flex space-x-3">
-              <button onClick={() => setManualDownloadModal({ show: false, sourceGroupId: null, targetGroupId: '' })} className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-white rounded-xl font-medium transition-colors">Cancel</button>
-              <button onClick={confirmManualDownload} className="flex-1 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-medium transition-colors">Start Pull</button>
+          ) : filteredGroups.length === 0 ? (
+            <EmptyState
+              title="No channels"
+              description={search ? 'No channels match your search.' : 'Authenticate with Telegram from Settings to load your channels.'}
+            />
+          ) : (
+            <ul className="divide-y divide-[var(--color-hairline)]">
+              {filteredGroups.map((group) => {
+                const indexed = mediaStats[group.id] || 0;
+                const progress = progresses[group.id];
+                const isWorking = !!progress;
+                return (
+                  <li key={group.id}>
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/channels/${group.id}`)}
+                      className="w-full text-left grid grid-cols-1 md:grid-cols-[1fr_120px_140px_80px_180px_120px] gap-3 md:gap-4 px-5 py-3.5 items-center hover:bg-white/[0.02] transition-colors group"
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-8 h-8 rounded-md bg-gradient-to-br from-slate-700 to-slate-800 ring-1 ring-white/5 flex items-center justify-center text-xs font-semibold text-slate-200 shrink-0">
+                          {group.title?.charAt(0).toUpperCase()}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-slate-100 truncate group-hover:text-[var(--color-route-dashboard)] transition-colors">
+                            {group.title}
+                          </p>
+                          {isWorking && (
+                            <p className="text-[10px] font-mono text-[var(--color-route-dashboard)] mt-0.5 animate-pulse">
+                              {progress.type === 'upload' ? '↑ uploading' : '↓ downloading'} · {progress.fileName?.slice(0, 30)}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                      <div className="text-xs font-mono text-slate-400">{group.isChannel ? 'Channel' : 'Group'}</div>
+                      <div className="text-xs font-mono text-slate-500 truncate">{group.id}</div>
+                      <div className="text-xs font-mono text-slate-300 tnum text-right">{indexed.toLocaleString()}</div>
+                      <div className="text-xs font-mono text-slate-500 tnum">—</div>
+                      <div className="flex justify-end items-center gap-1 opacity-60 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          onClick={() => navigate(`/channels/${group.id}`)}
+                          className="p-1.5 text-slate-400 hover:text-slate-100 rounded transition-colors"
+                          title="Browse"
+                        >
+                          <FiImage size={14} />
+                        </button>
+                        <button
+                          onClick={() => setPullDrawer({ open: true, groupId: group.id, targetGroupId: '' })}
+                          className="p-1.5 text-slate-400 hover:text-sky-400 rounded transition-colors"
+                          title="Pull"
+                        >
+                          <FiDownload size={14} />
+                        </button>
+                        <button
+                          onClick={() => setScheduleDrawer({ open: true, group })}
+                          className="p-1.5 text-slate-400 hover:text-[var(--color-route-settings)] rounded transition-colors"
+                          title="Schedule"
+                        >
+                          <FiClock size={14} />
+                        </button>
+                      </div>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      </section>
+
+      {/* Schedules list (compact, below) */}
+      {tasks.length > 0 && (
+        <section className="mt-10">
+          <div className="flex items-end justify-between mb-4">
+            <div>
+              <p className="text-[10px] font-mono uppercase tracking-widest text-slate-500 mb-1">Schedules</p>
+              <h2 className="font-display text-2xl font-light text-slate-100 tracking-tight">Recurring pulls</h2>
             </div>
           </div>
-        </div>
+          <ul className="surface-1 rounded-lg divide-y divide-[var(--color-hairline)]">
+            {tasks.map((task) => (
+              <li key={task._id} className="px-5 py-3 flex items-center gap-4">
+                <FiClock className="text-[var(--color-route-jobs)] shrink-0" size={14} />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm text-slate-200 truncate">{task.name}</p>
+                  <p className="text-[10px] font-mono text-slate-500 tnum mt-0.5">
+                    cron: {task.cronExpression}
+                  </p>
+                </div>
+                <button
+                  onClick={() => setDeleteConfirm({ open: true, task })}
+                  className="text-[10px] font-mono uppercase tracking-widest text-slate-500 hover:text-rose-400 transition-colors"
+                >
+                  [ delete ]
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
+
+      {/* Schedule Drawer */}
+      <Drawer
+        open={scheduleDrawer.open}
+        onClose={() => setScheduleDrawer({ open: false, group: null })}
+        title={scheduleDrawer.group ? `Schedule · ${scheduleDrawer.group.title}` : 'Schedule'}
+        subtitle="Set up a recurring pull for this channel."
+        width="md"
+        footer={
+          <>
+            <button
+              onClick={() => setScheduleDrawer({ open: false, group: null })}
+              className="px-4 py-2 text-sm text-slate-400 hover:text-slate-200 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleConfirmSchedule}
+              className="px-4 py-2 text-sm font-semibold rounded-md bg-[var(--color-route-settings)]/15 text-[var(--color-route-settings)] ring-1 ring-[var(--color-route-settings)]/30 hover:bg-[var(--color-route-settings)]/25 transition-colors"
+            >
+              Save Schedule
+            </button>
+          </>
+        }
+      >
+        <div className="space-y-5">
+          <div>
+            <label className="block text-[10px] font-mono uppercase tracking-widest text-slate-500 mb-2">Preset</label>
+            <div className="grid grid-cols-2 gap-2">
+              {PRESETS.map((p) => (
+                <button
+                  key={p.cron}
+                  onClick={() => { setSchedulePreset(p.cron); setScheduleCustom(''); }}
+                  className={`text-left px-3 py-2 text-xs rounded-md border transition-colors ${
+                    schedulePreset === p.cron && !scheduleCustom
+                      ? 'border-[var(--color-route-settings)]/40 bg-[var(--color-route-settings)]/10 text-slate-100'
+                      : 'border-[var(--color-hairline)] text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <div className="font-medium">{p.label}</div>
+                  <div className="font-mono text-[10px] text-slate-500 mt-0.5">{p.cron}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label className="block text-[10px] font-mono uppercase tracking-widest text-slate-500 mb-2">Custom cron</label>
+            <input
+              type="text"
+              value={scheduleCustom}
+              onChange={(e) => setScheduleCustom(e.target.value)}
+              placeholder="*/15 * * * *"
+              className="w-full px-3 py-2 bg-[var(--color-surface-2)] border border-[var(--color-hairline)] rounded-md text-sm text-slate-100 font-mono focus:outline-none focus:border-[var(--color-route-settings)]/50 transition-colors"
+            />
+          </div>
+          <div>
+            <label className="block text-[10px] font-mono uppercase tracking-widest text-slate-500 mb-2">Forward to (optional)</label>
+            <select
+              value={scheduleTarget}
+              onChange={(e) => setScheduleTarget(e.target.value)}
+              className="w-full px-3 py-2 bg-[var(--color-surface-2)] border border-[var(--color-hairline)] rounded-md text-sm text-slate-200 focus:outline-none focus:border-[var(--color-route-settings)]/50 transition-colors"
+            >
+              <option value="">No forward — local only</option>
+              {groups.filter((g) => g.id !== scheduleDrawer.group?.id).map((g) => (
+                <option key={g.id} value={g.id}>{g.title}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+      </Drawer>
+
+      {/* Pull Drawer */}
+      <Drawer
+        open={pullDrawer.open}
+        onClose={() => setPullDrawer({ open: false, groupId: null, targetGroupId: '' })}
+        title="Pull entire channel"
+        subtitle="Download all photos and videos (up to 10,000 messages)."
+        width="md"
+        footer={
+          <>
+            <button
+              onClick={() => setPullDrawer({ open: false, groupId: null, targetGroupId: '' })}
+              className="px-4 py-2 text-sm text-slate-400 hover:text-slate-200 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleConfirmPull}
+              className="px-4 py-2 text-sm font-semibold rounded-md bg-sky-500/15 text-sky-400 ring-1 ring-sky-500/30 hover:bg-sky-500/25 transition-colors flex items-center gap-2"
+            >
+              Start Pull <FiArrowRight size={12} />
+            </button>
+          </>
+        }
+      >
+        <div>
+          <label className="block text-[10px] font-mono uppercase tracking-widest text-slate-500 mb-2">
+            Auto-forward to (optional)
+          </label>
+          <select
+            value={pullDrawer.targetGroupId}
+            onChange={(e) => setPullDrawer({ ...pullDrawer, targetGroupId: e.target.value })}
+            className="w-full px-3 py-2 bg-[var(--color-surface-2)] border border-[var(--color-hairline)] rounded-md text-sm text-slate-200 focus:outline-none focus:border-sky-500/50 transition-colors"
+          >
+            <option value="">No forward — local only</option>
+            {groups.filter((g) => g.id !== pullDrawer.groupId).map((g) => (
+              <option key={g.id} value={g.id}>{g.title}</option>
+            ))}
+          </select>
+          <p className="text-[11px] text-slate-500 mt-2 leading-relaxed">
+            Files will be uploaded then deleted from local disk. The Media record is kept as a tombstone.
+          </p>
+        </div>
+      </Drawer>
+
+      <ConfirmDrawer
+        open={deleteConfirm.open}
+        onClose={() => setDeleteConfirm({ open: false, task: null })}
+        onConfirm={handleDeleteTask}
+        title="Delete schedule"
+        description={`This will stop the recurring pull for "${deleteConfirm.task?.name}". This action cannot be undone.`}
+        confirmLabel="Delete"
+        destructive
+      />
     </div>
   );
 }

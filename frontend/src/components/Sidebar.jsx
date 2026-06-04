@@ -1,84 +1,157 @@
 import { NavLink, useNavigate } from 'react-router-dom';
-import { FiHome, FiSettings, FiLogOut, FiBox, FiImage, FiActivity } from 'react-icons/fi';
+import { FiHome, FiSettings, FiLogOut, FiImage, FiActivity, FiFileText } from 'react-icons/fi';
+import useMediaQuery from '../hooks/useMediaQuery';
+
+const SECTIONS = [
+  {
+    label: 'Operations',
+    items: [
+      { to: '/', label: 'Dashboard', icon: FiHome, accent: 'dashboard', end: true },
+    ],
+  },
+  {
+    label: 'Library',
+    items: [
+      { to: '/media', label: 'Media Vault', icon: FiImage, accent: 'media' },
+      { to: '/active-jobs', label: 'Active Jobs', icon: FiActivity, accent: 'jobs' },
+      { to: '/logs', label: 'Audit Logs', icon: FiFileText, accent: 'logs' },
+    ],
+  },
+  {
+    label: 'System',
+    items: [
+      { to: '/settings', label: 'Settings', icon: FiSettings, accent: 'settings' },
+    ],
+  },
+];
+
+const accentText = {
+  dashboard: 'text-[var(--color-route-dashboard)]',
+  media: 'text-[var(--color-route-media)]',
+  jobs: 'text-[var(--color-route-jobs)]',
+  logs: 'text-[var(--color-route-logs)]',
+  settings: 'text-[var(--color-route-settings)]',
+};
+
+const accentBorder = {
+  dashboard: 'bg-[var(--color-route-dashboard)]',
+  media: 'bg-[var(--color-route-media)]',
+  jobs: 'bg-[var(--color-route-jobs)]',
+  logs: 'bg-[var(--color-route-logs)]',
+  settings: 'bg-[var(--color-route-settings)]',
+};
+
+function NavItem({ to, label, icon: Icon, accent, end, onNavigate }) {
+  return (
+    <NavLink
+      to={to}
+      end={end}
+      onClick={onNavigate}
+      className={({ isActive }) =>
+        `relative flex items-center gap-3 pl-4 pr-3 py-2.5 text-sm transition-colors duration-150 rounded-md ${
+          isActive
+            ? 'text-slate-100 bg-white/[0.04]'
+            : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.02]'
+        }`
+      }
+    >
+      {({ isActive }) => (
+        <>
+          {isActive && (
+            <span className={`absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-r ${accentBorder[accent]}`} />
+          )}
+          <Icon
+            size={16}
+            className={isActive ? accentText[accent] : 'text-slate-500 group-hover:text-slate-300'}
+            strokeWidth={isActive ? 2.25 : 1.75}
+          />
+          <span className="font-medium">{label}</span>
+        </>
+      )}
+    </NavLink>
+  );
+}
 
 export default function Sidebar() {
   const navigate = useNavigate();
+  const isMobile = useMediaQuery('(max-width: 768px)');
 
   const handleLogout = () => {
     localStorage.removeItem('token');
     navigate('/login');
   };
 
+  if (isMobile) {
+    return (
+      <nav className="fixed bottom-0 left-0 right-0 z-40 surface-1 border-t border-[var(--color-hairline)] flex justify-around items-center px-2 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+        {SECTIONS.flatMap((s) => s.items).map((item) => (
+          <NavLink
+            key={item.to}
+            to={item.to}
+            end={item.end}
+            className={({ isActive }) =>
+              `flex flex-col items-center gap-1 px-3 py-1.5 rounded-md transition-colors ${
+                isActive ? accentText[item.accent] : 'text-slate-500'
+              }`
+            }
+          >
+            {({ isActive }) => (
+              <>
+                <item.icon size={18} strokeWidth={isActive ? 2.25 : 1.75} />
+                <span className="text-[10px] font-mono uppercase tracking-wider">{item.label.split(' ')[0]}</span>
+              </>
+            )}
+          </NavLink>
+        ))}
+      </nav>
+    );
+  }
+
   return (
-    <div className="w-full md:w-72 bg-[#0a0f1d] border-b md:border-r border-slate-800/60 flex flex-row md:flex-col justify-between md:justify-start shadow-xl z-20 shrink-0 relative">
-      {/* Decorative Gradient Line */}
-      <div className="absolute top-0 right-0 w-[1px] h-full bg-gradient-to-b from-transparent via-blue-500/20 to-transparent hidden md:block"></div>
-      
-      <div className="p-4 md:p-8 flex items-center justify-between md:block shrink-0">
-        <div className="flex items-center space-x-3">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center shadow-lg shadow-blue-500/20">
-             <FiBox className="text-white" size={20} />
+    <aside className="hidden md:flex w-64 shrink-0 bg-[var(--color-surface-1)] border-r border-[var(--color-hairline)] flex-col h-screen sticky top-0">
+      {/* Brand */}
+      <div className="px-6 pt-7 pb-6 border-b border-[var(--color-hairline)]">
+        <div className="flex items-baseline gap-2">
+          <span className="font-display text-2xl italic font-light text-slate-100 tracking-tight">TelTel</span>
+          <span className="text-[9px] font-mono uppercase tracking-widest text-slate-500">v1.0</span>
+        </div>
+        <p className="text-[10px] font-mono uppercase tracking-widest text-slate-600 mt-1.5">Media Manager</p>
+      </div>
+
+      {/* Nav sections */}
+      <nav className="flex-1 overflow-y-auto py-4 px-3 space-y-6">
+        {SECTIONS.map((section) => (
+          <div key={section.label}>
+            <p className="px-4 mb-2 text-[10px] font-mono uppercase tracking-widest text-slate-600">
+              {section.label}
+            </p>
+            <div className="space-y-0.5">
+              {section.items.map((item) => (
+                <NavItem key={item.to} {...item} />
+              ))}
+            </div>
           </div>
-          <div>
-            <h1 className="text-xl md:text-2xl font-black tracking-tight text-slate-100">
-              TelTel
-            </h1>
-            <p className="hidden md:block text-[10px] font-semibold uppercase tracking-widest text-slate-500 mt-0.5">Media Manager</p>
+        ))}
+      </nav>
+
+      {/* User / Logout */}
+      <div className="px-3 py-3 border-t border-[var(--color-hairline)]">
+        <div className="flex items-center gap-3 px-3 py-2">
+          <div className="w-8 h-8 rounded-full bg-gradient-to-br from-slate-700 to-slate-800 ring-1 ring-white/10 flex items-center justify-center text-xs font-semibold text-slate-200">
+            A
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-xs font-medium text-slate-200 truncate">admin</p>
+            <p className="text-[10px] font-mono text-slate-500 tnum">session · 23h 41m</p>
           </div>
         </div>
-      </div>
-
-      <div className="flex md:flex-1 px-3 md:px-6 py-2 md:py-8 space-x-2 md:space-x-0 md:space-y-3 items-center md:items-stretch overflow-x-auto no-scrollbar">
-        <NavLink 
-          to="/" 
-          className={({isActive}) => `group flex items-center space-x-3 px-4 py-3 md:py-3.5 rounded-2xl transition-all duration-300 whitespace-nowrap ${isActive ? 'bg-blue-500/10 text-blue-400 font-semibold shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] border border-blue-500/20' : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'}`}
-        >
-          <FiHome size={20} className={({isActive}) => isActive ? 'text-blue-400' : 'text-slate-500 group-hover:text-slate-300 transition-colors'} />
-          <span className="text-sm md:text-base">Dashboard</span>
-        </NavLink>
-
-        <NavLink 
-          to="/media" 
-          className={({isActive}) => `group flex items-center space-x-3 px-4 py-3 md:py-3.5 rounded-2xl transition-all duration-300 whitespace-nowrap ${isActive ? 'bg-pink-500/10 text-pink-400 font-semibold shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] border border-pink-500/20' : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'}`}
-        >
-          <FiImage size={20} className={({isActive}) => isActive ? 'text-pink-400' : 'text-slate-500 group-hover:text-slate-300 transition-colors'} />
-          <span className="text-sm md:text-base">Media Vault</span>
-        </NavLink>
-
-        <NavLink 
-          to="/active-jobs" 
-          className={({isActive}) => `group flex items-center space-x-3 px-4 py-3 md:py-3.5 rounded-2xl transition-all duration-300 whitespace-nowrap ${isActive ? 'bg-emerald-500/10 text-emerald-400 font-semibold shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] border border-emerald-500/20' : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'}`}
-        >
-          <FiActivity size={20} className={({isActive}) => isActive ? 'text-emerald-400' : 'text-slate-500 group-hover:text-slate-300 transition-colors'} />
-          <span className="text-sm md:text-base">Active Jobs</span>
-        </NavLink>
-
-        <NavLink 
-          to="/logs" 
-          className={({isActive}) => `group flex items-center space-x-3 px-4 py-3 md:py-3.5 rounded-2xl transition-all duration-300 whitespace-nowrap ${isActive ? 'bg-purple-500/10 text-purple-400 font-semibold shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] border border-purple-500/20' : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'}`}
-        >
-          <FiActivity size={20} className={({isActive}) => isActive ? 'text-purple-400' : 'text-slate-500 group-hover:text-slate-300 transition-colors'} />
-          <span className="text-sm md:text-base">Audit Logs</span>
-        </NavLink>
-
-        <NavLink 
-          to="/settings" 
-          className={({isActive}) => `group flex items-center space-x-3 px-4 py-3 md:py-3.5 rounded-2xl transition-all duration-300 whitespace-nowrap ${isActive ? 'bg-indigo-500/10 text-indigo-400 font-semibold shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] border border-indigo-500/20' : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'}`}
-        >
-          <FiSettings size={20} className={({isActive}) => isActive ? 'text-indigo-400' : 'text-slate-500 group-hover:text-slate-300 transition-colors'} />
-          <span className="text-sm md:text-base">Settings</span>
-        </NavLink>
-      </div>
-
-      <div className="p-3 md:p-6 md:pb-8 flex items-center md:block shrink-0">
-        <button 
+        <button
           onClick={handleLogout}
-          className="group flex items-center space-x-3 px-4 py-3 w-full text-left text-slate-400 hover:bg-red-500/10 hover:text-red-400 rounded-2xl transition-all duration-300 whitespace-nowrap"
+          className="w-full flex items-center gap-2 px-3 py-2 text-xs font-mono text-slate-500 hover:text-rose-400 transition-colors"
         >
-          <FiLogOut size={20} className="text-slate-500 group-hover:text-red-400 transition-colors" />
-          <span className="font-medium text-sm md:text-base hidden sm:inline-block">Logout</span>
+          <FiLogOut size={13} /> [ sign out ]
         </button>
       </div>
-    </div>
+    </aside>
   );
 }

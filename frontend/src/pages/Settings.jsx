@@ -1,60 +1,99 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { FiCheckCircle, FiKey, FiSmartphone, FiShield, FiLock, FiSave, FiArrowRight } from 'react-icons/fi';
 import api from '../services/api';
-import { FiSmartphone, FiKey, FiLock, FiShield, FiCheckCircle, FiSave, FiSettings as FiSettingsIcon } from 'react-icons/fi';
+import { toast } from '../hooks/useToast';
+import PageHeader from '../components/PageHeader';
+import Stepper from '../components/Stepper';
+
+const STEPS = [
+  { label: 'Credentials' },
+  { label: 'Phone' },
+  { label: 'OTP' },
+  { label: '2FA' },
+  { label: 'Done' },
+];
+
+function Field({ label, value, onChange, type = 'text', placeholder, mono = true, big = false, maxLength, hint }) {
+  return (
+    <div>
+      <label className="block text-[10px] font-mono uppercase tracking-widest text-slate-500 mb-2">{label}</label>
+      <input
+        type={type}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        maxLength={maxLength}
+        className={`w-full px-4 py-3 bg-[var(--color-surface-2)] border border-[var(--color-hairline)] rounded-md text-slate-100 placeholder-slate-600 focus:outline-none focus:border-[var(--color-route-settings)]/50 focus:ring-1 focus:ring-[var(--color-route-settings)]/30 transition-colors text-center ${
+          mono ? 'font-mono' : ''
+        } ${big ? 'text-2xl tracking-widest' : 'text-sm'}`}
+      />
+      {hint && <p className="text-[10px] text-slate-500 mt-2">{hint}</p>}
+    </div>
+  );
+}
 
 export default function Settings() {
   const [apiId, setApiId] = useState('');
   const [apiHash, setApiHash] = useState('');
-  
   const [phone, setPhone] = useState('');
   const [phoneHash, setPhoneHash] = useState('');
   const [code, setCode] = useState('');
   const [password, setPassword] = useState('');
-  
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
-  const [configLoading, setConfigLoading] = useState(true);
 
-  useEffect(() => {
-    fetchConfig();
-  }, []);
-
-  const fetchConfig = async () => {
+  async function fetchConfig() {
     try {
       const res = await api.get('/system/settings');
       if (res.data.apiId) setApiId(res.data.apiId.toString());
       if (res.data.apiHash) setApiHash(res.data.apiHash.toString());
     } catch (err) {
       console.error(err);
-    } finally {
-      setConfigLoading(false);
     }
-  };
+  }
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    fetchConfig();
+  }, []);
 
   const saveConfig = async () => {
     setLoading(true);
     try {
       await api.put('/system/settings', { apiId, apiHash });
-      alert('Config saved to database.');
+      toast.success('Credentials saved to DB');
     } catch (err) {
-      alert('Error saving config');
+      toast.error('Save failed', { description: err.message });
     }
     setLoading(false);
   };
 
   const saveCreds = async () => {
     setLoading(true);
-    await api.post('/telegram/credentials', { apiId, apiHash });
-    setStep(2);
+    try {
+      await api.post('/telegram/credentials', { apiId, apiHash });
+      setStep(2);
+    } catch (err) {
+      toast.error('Could not initiate handshake', { description: err.message });
+    }
     setLoading(false);
   };
 
   const sendCode = async () => {
+    if (!phone) {
+      toast.error('Phone number required');
+      return;
+    }
     setLoading(true);
-    const res = await api.post('/telegram/send-code', { phoneNumber: phone });
-    if (res.data.phoneCodeHash) {
-      setPhoneHash(res.data.phoneCodeHash);
-      setStep(3);
+    try {
+      const res = await api.post('/telegram/send-code', { phoneNumber: phone });
+      if (res.data.phoneCodeHash) {
+        setPhoneHash(res.data.phoneCodeHash);
+        setStep(3);
+      }
+    } catch (err) {
+      toast.error('Could not send code', { description: err.message });
     }
     setLoading(false);
   };
@@ -64,161 +103,186 @@ export default function Settings() {
     try {
       await api.post('/telegram/sign-in', { phoneNumber: phone, phoneCodeHash: phoneHash, code, password });
       setStep(5);
+      toast.success('Session secured');
     } catch (err) {
       if (err.response?.data?.error === '2FA_REQUIRED') {
         setStep(4);
       } else {
-        alert('Error: ' + err.response?.data?.error);
+        toast.error('Sign-in failed', { description: err.response?.data?.error || err.message });
       }
     }
     setLoading(false);
   };
 
   return (
-    <div className="p-4 md:p-10 max-w-3xl mx-auto animate-fade-in pb-20">
-      
-      <div className="mb-10">
-        <h1 className="text-3xl md:text-5xl font-black text-transparent bg-clip-text bg-gradient-to-br from-indigo-300 to-purple-400 tracking-tight mb-2">
-          System Configuration
-        </h1>
-        <p className="text-slate-400 font-medium">Manage your Telegram API credentials and establish MTProto connections.</p>
-      </div>
+    <div className="p-6 md:p-10 max-w-3xl mx-auto pb-32 md:pb-12">
+      <PageHeader
+        eyebrow="System"
+        title="Configuration"
+        description="Telegram API credentials and MTProto authentication flow."
+        accent="settings"
+      />
 
-      <div className="glass-panel p-6 md:p-10 rounded-[2rem] border border-slate-700/50 shadow-2xl relative overflow-hidden mb-8">
-        <div className="absolute -top-32 -left-32 w-96 h-96 bg-blue-600/10 rounded-full mix-blend-screen filter blur-[100px] pointer-events-none"></div>
-        <div className="relative z-10 space-y-8">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-4">
-              <div className="p-3 bg-blue-500/10 rounded-2xl text-blue-400 border border-blue-500/20">
-                <FiSettingsIcon size={24} />
-              </div>
-              <div>
-                <h2 className="text-2xl font-bold text-white tracking-tight">Database Config</h2>
-                <p className="text-sm text-slate-400 font-medium mt-1">Credentials stored securely in MongoDB.</p>
-              </div>
-            </div>
-            <button onClick={saveConfig} disabled={loading} className="px-5 py-2.5 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 rounded-xl font-bold transition-all border border-blue-500/30 flex items-center shadow-lg hover:shadow-[0_0_15px_rgba(59,130,246,0.2)]">
-               {loading ? <div className="w-5 h-5 border-2 border-blue-400/30 border-t-blue-400 rounded-full animate-spin mr-2"></div> : <FiSave className="mr-2" />} Save Settings
-            </button>
+      {/* DB Config panel */}
+      <section className="surface-1 rounded-lg p-6 mb-8">
+        <div className="flex items-center justify-between mb-5">
+          <div>
+            <p className="text-[10px] font-mono uppercase tracking-widest text-slate-500 mb-1">Database</p>
+            <h3 className="text-sm font-semibold text-slate-100">API credentials</h3>
           </div>
-          
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-            <div>
-              <label className="block text-sm font-semibold text-slate-300 mb-2 uppercase tracking-wider">APP ID</label>
-              <input type="text" className="w-full px-5 py-4 bg-slate-900/60 border border-slate-700/50 rounded-xl text-white focus:ring-2 focus:ring-blue-500/50 outline-none transition-all shadow-inner font-mono" value={apiId} onChange={e => setApiId(e.target.value)} placeholder="e.g. 1234567" disabled={configLoading} />
-            </div>
-            <div>
-              <label className="block text-sm font-semibold text-slate-300 mb-2 uppercase tracking-wider">API HASH</label>
-              <input type="text" className="w-full px-5 py-4 bg-slate-900/60 border border-slate-700/50 rounded-xl text-white focus:ring-2 focus:ring-blue-500/50 outline-none transition-all shadow-inner font-mono" value={apiHash} onChange={e => setApiHash(e.target.value)} placeholder="e.g. abc123def456..." disabled={configLoading} />
-            </div>
-          </div>
+          <button
+            onClick={saveConfig}
+            disabled={loading}
+            className="flex items-center gap-2 px-3 py-1.5 text-xs font-mono uppercase tracking-widest text-slate-300 hover:text-slate-100 border border-[var(--color-hairline)] rounded-md transition-colors"
+          >
+            {loading ? <div className="w-3 h-3 border-2 border-slate-400/30 border-t-slate-400 rounded-full animate-spin" /> : <FiSave size={12} />}
+            Save
+          </button>
         </div>
-      </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <Field label="APP ID" value={apiId} onChange={setApiId} placeholder="1234567" />
+          <Field label="API HASH" value={apiHash} onChange={setApiHash} placeholder="abc123def456..." />
+        </div>
+      </section>
 
-      <div className="glass-panel p-6 md:p-10 rounded-[2rem] border border-slate-700/50 shadow-2xl relative overflow-hidden">
-        
-        {/* Dynamic Background */}
-        <div className="absolute -top-32 -right-32 w-96 h-96 bg-purple-600/10 rounded-full mix-blend-screen filter blur-[100px] pointer-events-none"></div>
+      {/* Stepper */}
+      <section className="mb-8">
+        <Stepper steps={STEPS} current={step - 1} />
+      </section>
 
-        {step === 1 && (
-          <div className="space-y-8 animate-fade-in-up">
-            <div className="flex items-center space-x-4">
-              <div className="p-3 bg-indigo-500/10 rounded-2xl text-indigo-400 border border-indigo-500/20">
-                <FiKey size={24} />
+      {/* Step content */}
+      <div className="surface-1 rounded-lg p-6 md:p-8">
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={step}
+            initial={{ opacity: 0, x: 20 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: -20 }}
+            transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+          >
+            {step === 1 && (
+              <div className="space-y-5">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-md bg-[var(--color-route-settings)]/10 ring-1 ring-[var(--color-route-settings)]/30 flex items-center justify-center text-[var(--color-route-settings)]">
+                    <FiKey size={18} />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-semibold text-slate-100">Step 01 · Initiate Handshake</h3>
+                    <p className="text-xs text-slate-500">Use the credentials saved above.</p>
+                  </div>
+                </div>
+                <button
+                  onClick={saveCreds}
+                  disabled={loading || !apiId || !apiHash}
+                  className="w-full py-3 bg-[var(--color-route-settings)]/15 text-[var(--color-route-settings)] ring-1 ring-[var(--color-route-settings)]/30 rounded-md text-sm font-semibold hover:bg-[var(--color-route-settings)]/25 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                >
+                  {loading
+                    ? <div className="w-4 h-4 border-2 border-[var(--color-route-settings)]/30 border-t-[var(--color-route-settings)] rounded-full animate-spin" />
+                    : <>Start Authentication Flow <FiArrowRight size={14} /></>
+                  }
+                </button>
               </div>
-              <div>
-                <h2 className="text-2xl font-bold text-white tracking-tight">Step 1: Initiate Handshake</h2>
-                <p className="text-sm text-slate-400 font-medium mt-1">Uses the API credentials stored above.</p>
-              </div>
-            </div>
-            
-            <button onClick={saveCreds} disabled={loading} className="w-full py-4 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-xl font-bold tracking-wide transition-all shadow-lg hover:shadow-blue-500/25 transform hover:-translate-y-0.5 disabled:opacity-50 flex justify-center">
-              {loading ? <div className="w-6 h-6 border-2 border-white/30 border-t-white rounded-full animate-spin"></div> : 'Start Authentication Flow'}
-            </button>
-          </div>
-        )}
+            )}
 
-        {step === 2 && (
-          <div className="space-y-8 animate-fade-in-up">
-            <div className="flex items-center space-x-4">
-              <div className="p-3 bg-indigo-500/10 rounded-2xl text-indigo-400 border border-indigo-500/20">
-                <FiSmartphone size={24} />
+            {step === 2 && (
+              <div className="space-y-5">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-md bg-[var(--color-route-settings)]/10 ring-1 ring-[var(--color-route-settings)]/30 flex items-center justify-center text-[var(--color-route-settings)]">
+                    <FiSmartphone size={18} />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-semibold text-slate-100">Step 02 · Identity Verification</h3>
+                    <p className="text-xs text-slate-500">International E.164 format required.</p>
+                  </div>
+                </div>
+                <Field label="Phone" value={phone} onChange={setPhone} placeholder="+1234567890" big />
+                <button
+                  onClick={sendCode}
+                  disabled={loading || !phone}
+                  className="w-full py-3 bg-[var(--color-route-settings)]/15 text-[var(--color-route-settings)] ring-1 ring-[var(--color-route-settings)]/30 rounded-md text-sm font-semibold hover:bg-[var(--color-route-settings)]/25 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                >
+                  {loading
+                    ? <div className="w-4 h-4 border-2 border-[var(--color-route-settings)]/30 border-t-[var(--color-route-settings)] rounded-full animate-spin" />
+                    : <>Transmit OTP Request <FiArrowRight size={14} /></>
+                  }
+                </button>
               </div>
-              <div>
-                <h2 className="text-2xl font-bold text-white tracking-tight">Identity Verification</h2>
-                <p className="text-sm text-slate-400 font-medium mt-1">International E.164 format required.</p>
+            )}
+
+            {step === 3 && (
+              <div className="space-y-5">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-md bg-[var(--color-route-settings)]/10 ring-1 ring-[var(--color-route-settings)]/30 flex items-center justify-center text-[var(--color-route-settings)]">
+                    <FiShield size={18} />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-semibold text-slate-100">Step 03 · OTP Authentication</h3>
+                    <p className="text-xs text-slate-500">Awaiting Telegram system payload.</p>
+                  </div>
+                </div>
+                <Field label="Code" value={code} onChange={setCode} placeholder="00000" big maxLength={5} />
+                <button
+                  onClick={signIn}
+                  disabled={loading || code.length < 5}
+                  className="w-full py-3 bg-[var(--color-route-settings)]/15 text-[var(--color-route-settings)] ring-1 ring-[var(--color-route-settings)]/30 rounded-md text-sm font-semibold hover:bg-[var(--color-route-settings)]/25 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                >
+                  {loading
+                    ? <div className="w-4 h-4 border-2 border-[var(--color-route-settings)]/30 border-t-[var(--color-route-settings)] rounded-full animate-spin" />
+                    : <>Verify Token <FiArrowRight size={14} /></>
+                  }
+                </button>
               </div>
-            </div>
+            )}
 
-            <div>
-              <input type="text" className="w-full px-5 py-5 bg-slate-900/60 border border-slate-700/50 rounded-xl text-white focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500/50 outline-none transition-all shadow-inner font-mono text-2xl tracking-wider text-center" value={phone} onChange={e => setPhone(e.target.value)} placeholder="+1234567890" />
-            </div>
-            
-            <button onClick={sendCode} disabled={loading} className="w-full py-4 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white rounded-xl font-bold tracking-wide transition-all shadow-lg hover:shadow-indigo-500/25 transform hover:-translate-y-0.5 disabled:opacity-50 flex justify-center">
-               {loading ? <div className="w-6 h-6 border-2 border-white/30 border-t-white rounded-full animate-spin"></div> : 'Transmit OTP Request'}
-            </button>
-          </div>
-        )}
-
-        {step === 3 && (
-          <div className="space-y-8 animate-fade-in-up">
-             <div className="flex items-center space-x-4">
-              <div className="p-3 bg-purple-500/10 rounded-2xl text-purple-400 border border-purple-500/20">
-                <FiShield size={24} />
+            {step === 4 && (
+              <div className="space-y-5">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-md bg-rose-500/10 ring-1 ring-rose-500/30 flex items-center justify-center text-rose-400">
+                    <FiLock size={18} />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-semibold text-slate-100">Step 04 · 2FA Enforced</h3>
+                    <p className="text-xs text-slate-500">Cloud password required to unlock session.</p>
+                  </div>
+                </div>
+                <Field label="Password" value={password} onChange={setPassword} type="password" placeholder="••••••••" />
+                <button
+                  onClick={signIn}
+                  disabled={loading || !password}
+                  className="w-full py-3 bg-rose-500/15 text-rose-400 ring-1 ring-rose-500/30 rounded-md text-sm font-semibold hover:bg-rose-500/25 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                >
+                  {loading
+                    ? <div className="w-4 h-4 border-2 border-rose-400/30 border-t-rose-400 rounded-full animate-spin" />
+                    : <>Authenticate <FiArrowRight size={14} /></>
+                  }
+                </button>
               </div>
-              <div>
-                <h2 className="text-2xl font-bold text-white tracking-tight">OTP Authentication</h2>
-                <p className="text-sm text-slate-400 font-medium mt-1">Awaiting telegram system payload.</p>
+            )}
+
+            {step === 5 && (
+              <div className="text-center py-10 space-y-5">
+                <div className="relative inline-block">
+                  <div className="absolute inset-0 bg-emerald-400/20 rounded-full blur-2xl animate-pulse-soft" />
+                  <div className="relative w-20 h-20 bg-emerald-500/10 text-emerald-400 rounded-full flex items-center justify-center mx-auto ring-1 ring-emerald-500/30">
+                    <FiCheckCircle size={36} />
+                  </div>
+                </div>
+                <div>
+                  <h3 className="font-display text-3xl font-light text-slate-100 tracking-tight mb-2">Session Secured</h3>
+                  <p className="text-sm text-slate-400 max-w-md mx-auto leading-relaxed">
+                    Your MTProto connection is authenticated and state is preserved. You can now operate the dashboard.
+                  </p>
+                </div>
+                <a
+                  href="/"
+                  className="inline-flex items-center gap-2 px-4 py-2 text-xs font-mono uppercase tracking-widest text-slate-100 border border-[var(--color-hairline)] rounded-md hover:border-slate-400 transition-colors"
+                >
+                  Go to Dashboard <FiArrowRight size={12} />
+                </a>
               </div>
-            </div>
-
-            <div>
-              <input type="text" className="w-full px-5 py-5 bg-slate-900/60 border border-slate-700/50 rounded-xl text-white focus:ring-2 focus:ring-purple-500/50 focus:border-purple-500/50 outline-none transition-all shadow-inner font-mono text-4xl tracking-[1em] text-center" value={code} onChange={e => setCode(e.target.value)} placeholder="00000" maxLength={5} />
-            </div>
-            
-            <button onClick={signIn} disabled={loading} className="w-full py-4 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white rounded-xl font-bold tracking-wide transition-all shadow-lg hover:shadow-purple-500/25 transform hover:-translate-y-0.5 disabled:opacity-50 flex justify-center">
-               {loading ? <div className="w-6 h-6 border-2 border-white/30 border-t-white rounded-full animate-spin"></div> : 'Verify Token'}
-            </button>
-          </div>
-        )}
-
-        {step === 4 && (
-          <div className="space-y-8 animate-fade-in-up">
-            <div className="flex items-center space-x-4">
-              <div className="p-3 bg-rose-500/10 rounded-2xl text-rose-400 border border-rose-500/20">
-                <FiLock size={24} />
-              </div>
-              <div>
-                <h2 className="text-2xl font-bold text-white tracking-tight">2FA Enforced</h2>
-                <p className="text-sm text-slate-400 font-medium mt-1">Cloud password required to unlock session.</p>
-              </div>
-            </div>
-
-            <div>
-              <input type="password" className="w-full px-5 py-4 bg-slate-900/60 border border-slate-700/50 rounded-xl text-white focus:ring-2 focus:ring-rose-500/50 focus:border-rose-500/50 outline-none transition-all shadow-inner text-xl" value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" />
-            </div>
-            
-            <button onClick={signIn} disabled={loading} className="w-full py-4 bg-gradient-to-r from-rose-600 to-orange-600 hover:from-rose-500 hover:to-orange-500 text-white rounded-xl font-bold tracking-wide transition-all shadow-lg hover:shadow-rose-500/25 transform hover:-translate-y-0.5 disabled:opacity-50 flex justify-center">
-               {loading ? <div className="w-6 h-6 border-2 border-white/30 border-t-white rounded-full animate-spin"></div> : 'Authenticate'}
-            </button>
-          </div>
-        )}
-
-        {step === 5 && (
-          <div className="text-center py-16 space-y-6 animate-fade-in-up">
-            <div className="relative inline-block">
-              <div className="absolute inset-0 bg-emerald-500/20 rounded-full filter blur-xl animate-pulse-slow"></div>
-              <div className="relative w-24 h-24 bg-emerald-500/10 text-emerald-400 rounded-3xl flex items-center justify-center mx-auto border border-emerald-500/30 shadow-[inset_0_0_20px_rgba(16,185,129,0.2)]">
-                <FiCheckCircle size={48} />
-              </div>
-            </div>
-            <div>
-              <h2 className="text-3xl font-black text-white tracking-tight mb-2">Session Secured</h2>
-              <p className="text-slate-400 font-medium max-w-md mx-auto">Your MTProto connection is successfully authenticated and state is preserved. You may now operate the Dashboard.</p>
-            </div>
-          </div>
-        )}
-
+            )}
+          </motion.div>
+        </AnimatePresence>
       </div>
     </div>
   );
