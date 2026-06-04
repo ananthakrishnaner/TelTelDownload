@@ -2,6 +2,7 @@ const { TelegramClient, Api } = require('telegram');
 const { StringSession } = require('telegram/sessions');
 const Setting = require('../models/Setting');
 const Media = require('../models/Media');
+const JobHistory = require('../models/JobHistory');
 const path = require('path');
 const fs = require('fs');
 const socket = require('../socket');
@@ -119,7 +120,8 @@ async function downloadMediaForGroup(groupId, targetGroupId = null) {
   if (!fs.existsSync(downloadDir)) fs.mkdirSync(downloadDir, { recursive: true });
 
   const entity = await client.getEntity(groupId);
-  const messages = await client.getMessages(entity, { limit: 100, filter: new Api.InputMessagesFilterPhotoVideo() });
+  // Fetch up to 10,000 messages instead of 100
+  const messages = await client.getMessages(entity, { limit: 10000, filter: new Api.InputMessagesFilterPhotoVideo() });
   const validMessages = messages.filter(m => m.media);
 
   activeJobs.set(jobId, {
@@ -149,10 +151,12 @@ async function downloadMediaForGroup(groupId, targetGroupId = null) {
     const filePath = path.join(downloadDir, fileName);
 
     let existing = await Media.findOne({ telegramMessageId: msgId, channelId: groupId });
+    
+    // User requested to re-download if deleted from vault
     if (existing && fs.existsSync(existing.localPath)) {
       if (!targetGroupId || existing.status === 'uploaded_to_group') {
         downloadedCount++;
-        activeJobs.get(jobId).progress = downloadedCount;
+        if (activeJobs.has(jobId)) activeJobs.get(jobId).progress = downloadedCount;
         io.emit('job_progress', { jobId, groupId, progress: downloadedCount, total: validMessages.length });
         continue;
       }
@@ -224,6 +228,22 @@ async function downloadMediaForGroup(groupId, targetGroupId = null) {
   if (activeJobs.has(jobId)) {
     const job = activeJobs.get(jobId);
     job.status = job.status === 'aborted' ? 'aborted' : 'completed';
+    job.progress = downloadedCount;
+    
+    // Save to Database
+    try {
+      await JobHistory.create({
+        jobId: job.id,
+        type: job.type,
+        groupId: job.groupId,
+        status: job.status,
+        progress: job.progress,
+        total: job.total,
+        startedAt: job.startedAt,
+        completedAt: Date.now()
+      });
+    } catch (e) { console.error('Failed to save JobHistory:', e); }
+
     setTimeout(() => activeJobs.delete(jobId), 10000); // Keep around for 10s so frontend sees completion
   }
   return downloadedCount;
@@ -290,10 +310,11 @@ async function downloadSpecificMedia(groupId, messageIds, targetGroupId = null) 
     const filePath = path.join(downloadDir, fileName);
 
     let existing = await Media.findOne({ telegramMessageId: msgId, channelId: groupId });
+    
     if (existing && fs.existsSync(existing.localPath)) {
       if (!targetGroupId || existing.status === 'uploaded_to_group') {
         downloadedCount++;
-        activeJobs.get(jobId).progress = downloadedCount;
+        if (activeJobs.has(jobId)) activeJobs.get(jobId).progress = downloadedCount;
         io.emit('job_progress', { jobId, groupId, progress: downloadedCount, total: messages.length });
         continue;
       }
@@ -356,6 +377,22 @@ async function downloadSpecificMedia(groupId, messageIds, targetGroupId = null) 
   if (activeJobs.has(jobId)) {
     const job = activeJobs.get(jobId);
     job.status = job.status === 'aborted' ? 'aborted' : 'completed';
+    job.progress = downloadedCount;
+    
+    // Save to Database
+    try {
+      await JobHistory.create({
+        jobId: job.id,
+        type: job.type,
+        groupId: job.groupId,
+        status: job.status,
+        progress: job.progress,
+        total: job.total,
+        startedAt: job.startedAt,
+        completedAt: Date.now()
+      });
+    } catch (e) { console.error('Failed to save JobHistory:', e); }
+
     setTimeout(() => activeJobs.delete(jobId), 10000);
   }
   return downloadedCount;
@@ -455,6 +492,22 @@ async function bulkForwardLocalMedia(mediaIds, targetGroupId) {
   if (activeJobs.has(jobId)) {
     const job = activeJobs.get(jobId);
     job.status = job.status === 'aborted' ? 'aborted' : 'completed';
+    job.progress = uploadedCount;
+
+    // Save to Database
+    try {
+      await JobHistory.create({
+        jobId: job.id,
+        type: job.type,
+        groupId: job.groupId,
+        status: job.status,
+        progress: job.progress,
+        total: job.total,
+        startedAt: job.startedAt,
+        completedAt: Date.now()
+      });
+    } catch (e) { console.error('Failed to save JobHistory:', e); }
+
     setTimeout(() => activeJobs.delete(jobId), 10000);
   }
   return uploadedCount;

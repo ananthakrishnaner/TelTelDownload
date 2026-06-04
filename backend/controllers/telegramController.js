@@ -75,6 +75,16 @@ exports.getActiveJobs = (req, res) => {
   }
 };
 
+exports.getJobHistory = async (req, res) => {
+  try {
+    const JobHistory = require('../models/JobHistory');
+    const history = await JobHistory.find().sort({ startedAt: -1 }).limit(50);
+    res.json({ history });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
 exports.stopJob = (req, res) => {
   try {
     const success = telegramService.stopJob(req.params.id);

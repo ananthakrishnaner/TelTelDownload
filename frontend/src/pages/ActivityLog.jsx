@@ -67,9 +67,14 @@ export default function ActivityLog() {
                     {log.action}
                   </td>
                   <td className="p-4 text-slate-400 text-sm">
-                    <pre className="bg-slate-900/50 p-2 rounded-lg border border-slate-700/50 text-xs overflow-x-auto no-scrollbar font-mono">
-                      {JSON.stringify(log.details, null, 2)}
-                    </pre>
+                    <div className="flex flex-wrap gap-2">
+                      {log.details && Object.entries(log.details).map(([key, val]) => (
+                        <div key={key} className="bg-slate-900/50 border border-slate-700/50 px-2 py-1 rounded-md flex items-center space-x-2 text-[11px]">
+                          <span className="text-slate-500 uppercase tracking-wider font-bold">{key}:</span>
+                          <span className="text-slate-300 font-mono break-all">{typeof val === 'object' ? JSON.stringify(val) : String(val)}</span>
+                        </div>
+                      ))}
+                    </div>
                   </td>
                 </tr>
               ))}

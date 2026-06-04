@@ -19,6 +19,9 @@ export default function Dashboard() {
   const [showScheduleModal, setShowScheduleModal] = useState(false);
   const [showMediaModal, setShowMediaModal] = useState(false);
   const [selectedGroup, setSelectedGroup] = useState(null);
+  const [jobHistory, setJobHistory] = useState([]);
+  const [fileProgresses, setFileProgresses] = useState({});
+  const [activeTab, setActiveTab] = useState('active'); // active or history
   
   // Schedule Form
   const [scheduleTime, setScheduleTime] = useState('');
@@ -46,36 +49,65 @@ export default function Dashboard() {
             const next = { ...prev };
             delete next[data.groupId];
             return next;
-          });
-          fetchData(); // Refresh stats
-        }, 3000);
-      }
+        [data.groupId]: { fileName: data.fileName, progress: data.progress, type: data.type }
+      }));
     });
-    
+
     socketRef.current.on('job_progress', (data) => {
       setJobProgress(prev => ({ ...prev, [data.jobId]: data }));
     });
-    return () => socketRef.current.disconnect();
+    
+    return () => {
+      socketRef.current.off('job_progress');
+      socketRef.current.off('progress');
+      socketRef.current.disconnect();
+    };
   }, []);
 
   const fetchData = async () => {
     try {
       setLoading(true);
-      const [groupsRes, tasksRes, statsRes] = await Promise.all([
+      const [statsRes, jobsRes, groupsRes, historyRes] = await Promise.all([
+        api.get('/media/stats'),
+        api.get('/telegram/active-jobs'),
         api.get('/telegram/groups'),
-        api.get('/scheduler'),
-        api.get('/media/stats')
+        api.get('/telegram/job-history').catch(() => ({ data: { history: [] } }))
       ]);
-      setGroups(groupsRes.data.groups || []);
-      setTasks(tasksRes.data.tasks || []);
       
-      const statsObj = {};
-      (statsRes.data || []).forEach(s => statsObj[s._id] = s.count);
-      setMediaStats(statsObj);
+      setMediaStats(statsRes.data || {});
+      setActiveJobs(jobsRes.data.jobs || []);
+      if (historyRes && historyRes.data && historyRes.data.history) {
+        setJobHistory(historyRes.data.history);
+      }
+      
+      const gData = groupsRes.data.groups || [];
+      setGroups(gData);
+      
+      const vaults = await Promise.all(
+        gData.map(g => api.get(`/telegram/group-media/${g.id}`).catch(() => ({ data: { media: [] } })))
+      );
+      
+      const merged = gData.map((g, i) => ({
+        ...g,
+        vaultMedia: vaults[i]?.data?.media || []
+      }));
+      setAvailableGroups(merged);
+      
+      const tasksRes = await api.get('/scheduler');
+      setTasks(tasksRes.data.tasks || []);
     } catch (err) {
-      console.error(err);
+      console.error('Failed to fetch data:', err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const abortJob = async (jobId) => {
+    try {
+      await api.post(`/telegram/abort-job/${jobId}`);
+      fetchData();
+    } catch (err) {
+      alert(err.message);
     }
   };
 
@@ -99,15 +131,13 @@ export default function Dashboard() {
 
   const submitSchedule = async () => {
     try {
-      let finalCron = '0 * * * *'; // default hourly
+      let finalCron = '0 * * * *';
       if (scheduleTime) {
-        // scheduleTime format: YYYY-MM-DDThh:mm
         const dateObj = new Date(scheduleTime);
-        const min = dateObj.getMinutes();
-        const hr = dateObj.getHours();
-        const dom = dateObj.getDate();
-        const mon = dateObj.getMonth() + 1;
-        // Run exactly at this month, day, hour, and minute
+        const min = dateObj.getUTCMinutes();
+        const hr = dateObj.getUTCHours();
+        const dom = dateObj.getUTCDate();
+        const mon = dateObj.getUTCMonth() + 1;
         finalCron = `${min} ${hr} ${dom} ${mon} *`;
       }
 
@@ -220,11 +250,12 @@ export default function Dashboard() {
         </div>
         <div className="bg-slate-800/40 border border-slate-700/50 rounded-2xl p-6 shadow-xl flex flex-col items-center text-center hover:bg-slate-800/60 transition-colors">
           <h4 className="text-slate-400 text-sm font-semibold uppercase tracking-wider mb-2">Active Jobs Running</h4>
-          <span className="text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-amber-400 to-orange-400">{Object.keys(jobProgress).length}</span>
+          <span className="text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-amber-400 to-orange-400">{activeJobs.length}</span>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+      {/* Main Content Area */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         
         {/* Groups List */}
         <div className="lg:col-span-2 space-y-6">
@@ -252,12 +283,6 @@ export default function Dashboard() {
                 </div>
               ) : filteredGroups.map((group, i) => (
                 <div key={group.id} className="p-4 md:p-6 flex flex-col sm:flex-row sm:items-center justify-between hover:bg-white/[0.02] transition-colors group relative">
-                  
-                  {/* Progress Bar Overlay */}
-                  {progresses[group.id] && (
-                    <div className="absolute bottom-0 left-0 h-1 bg-gradient-to-r from-blue-500 to-purple-500 transition-all duration-300" style={{width: `${progresses[group.id].progress}%`}}></div>
-                  )}
-
                   <div className="flex flex-col sm:flex-row items-center space-x-4 mb-4 sm:mb-0 w-full sm:w-1/2">
                     <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-slate-700 to-slate-800 flex items-center justify-center text-xl font-bold text-white border border-slate-600/50 shadow-inner group-hover:border-blue-500/30 transition-colors shrink-0">
                       <span>{group.title.charAt(0)}</span>
