@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { FiImage, FiVideo, FiSearch, FiCheck, FiAlertTriangle } from 'react-icons/fi';
+import { FiImage, FiVideo, FiSearch, FiCheck, FiAlertTriangle, FiRefreshCw } from 'react-icons/fi';
 import api from '../services/api';
 import { toast } from '../hooks/useToast';
 import PageHeader from '../components/PageHeader';
@@ -35,6 +35,28 @@ export default function MediaManager() {
   const [statusFilter, setStatusFilter] = useState('all');
   const [lightboxIndex, setLightboxIndex] = useState(null);
   const [forwardDrawer, setForwardDrawer] = useState({ open: false, target: '' });
+  const [syncing, setSyncing] = useState(false);
+
+  // Auto-Sync Vault: kick off a group_pull against every joined channel.
+  // The backend returns the list of started jobIds; we surface them in
+  // ActiveJobs and let the user monitor/control there.
+  const syncAll = async () => {
+    if (syncing) return;
+    try {
+      setSyncing(true);
+      const res = await api.post('/telegram/sync-all', {});
+      const { total } = res.data || {};
+      toast.success(`Sync started · ${total} channel${total === 1 ? '' : 's'}`, {
+        description: 'Watch ActiveJobs for live progress',
+      });
+    } catch (err) {
+      toast.error('Auto Sync failed', { description: err.message });
+    } finally {
+      // Even though the jobs run for a long time, the request itself
+      // returns immediately. Free the button after a brief moment.
+      setTimeout(() => setSyncing(false), 1500);
+    }
+  };
 
   async function fetchGroups() {
     try {
@@ -169,6 +191,17 @@ export default function MediaManager() {
         title="Media Vault"
         description={`${media.length} item${media.length === 1 ? '' : 's'} downloaded · stored locally at ./media_downloads`}
         accent="media"
+        actions={
+          <button
+            onClick={syncAll}
+            disabled={syncing}
+            className="flex items-center gap-2 px-3 py-2 text-xs font-mono uppercase tracking-widest text-slate-100 bg-sky-500/15 hover:bg-sky-500/25 ring-1 ring-sky-500/30 disabled:opacity-50 disabled:cursor-not-allowed rounded-md transition-colors"
+            title="Pull all new media from every joined channel/group"
+          >
+            <FiRefreshCw size={12} className={syncing ? 'animate-spin' : ''} />
+            {syncing ? 'Syncing…' : 'Auto Sync Vault'}
+          </button>
+        }
       />
 
       {/* Filter bar */}

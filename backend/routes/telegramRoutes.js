@@ -12,6 +12,7 @@ router.get('/job-history', telegramController.getJobHistory);
 router.post('/stop-job/:id', telegramController.stopJob);
 router.post('/download', telegramController.triggerDownload);
 router.post('/download-specific', telegramController.downloadSpecific);
+router.post('/sync-all', telegramController.syncAllMedia);
 
 // Session state + manual reconnect.
 router.get('/session', telegramController.getSession);
