@@ -236,16 +236,32 @@ exports.wipeAllMedia = async (req, res) => {
         error: 'Missing confirmation token. Body must be { confirm: "WIPE_ALL" }.',
       });
     }
+    // Sanity check: can we even see the downloads dir from the running
+    // process? If the volume mount is wrong (common after a deploy),
+    // every unlinkSync would throw EBADF/EACCES and the user would
+    // see 500 even though their request was correct.
+    const downloadDir = path.resolve(__dirname, '..', '..', 'media_downloads');
+    let dirOk = true;
+    try { fs.accessSync(downloadDir, fs.constants.W_OK); }
+    catch (e) { dirOk = false; }
     const all = await Media.find({}, { localPath: 1 });
     let filesDeleted = 0;
     let filesMissing = 0;
+    let filesFailed = 0;
     for (const m of all) {
-      if (m.localPath && fs.existsSync(m.localPath)) {
-        try { fs.unlinkSync(m.localPath); filesDeleted += 1; }
-        catch (e) { /* ignore — best-effort */ }
-      } else {
-        filesMissing += 1;
+      if (!m.localPath) { filesMissing += 1; continue; }
+      // Defensive: only unlink paths under our known media dir. A
+      // stray Media doc with a stray localPath (e.g. set on a
+      // different machine) would otherwise let one bad row tank
+      // the whole wipe.
+      const resolved = path.resolve(m.localPath);
+      if (!resolved.startsWith(downloadDir + path.sep) && resolved !== downloadDir) {
+        filesFailed += 1;
+        continue;
       }
+      if (!fs.existsSync(resolved)) { filesMissing += 1; continue; }
+      try { fs.unlinkSync(resolved); filesDeleted += 1; }
+      catch (e) { filesFailed += 1; }
     }
     const docResult = await Media.deleteMany({});
     res.json({
@@ -254,10 +270,13 @@ exports.wipeAllMedia = async (req, res) => {
         docs: docResult.deletedCount || 0,
         files: filesDeleted,
         filesMissing,
+        filesFailed,
       },
+      dirOk,
+      downloadDir,
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: err.message, stack: err.stack });
   }
 };
 
