@@ -182,38 +182,72 @@ exports.deleteMedia = async (req, res) => {
   try {
     const media = await Media.findById(req.params.id);
     if (!media) return res.status(404).json({ error: 'Not found' });
-    
-    if (fs.existsSync(media.localPath)) {
-      fs.unlinkSync(media.localPath);
+
+    // Best-effort file delete, sandboxed to ./media_downloads.
+    let fileDeleted = false;
+    let fileError = null;
+    if (media.localPath) {
+      const downloadDir = path.resolve(__dirname, '..', '..', 'media_downloads');
+      const resolved = path.resolve(media.localPath);
+      const inSandbox = resolved === downloadDir || resolved.startsWith(downloadDir + path.sep);
+      if (inSandbox && fs.existsSync(resolved)) {
+        try { fs.unlinkSync(resolved); fileDeleted = true; }
+        catch (e) { fileError = e.message; }
+      }
     }
-    
+
     await Media.findByIdAndDelete(req.params.id);
-    res.json({ success: true });
+    res.json({ success: true, fileDeleted, fileError });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: err.message, stack: err.stack });
   }
 };
 
 exports.bulkDeleteMedia = async (req, res) => {
   try {
     const { mediaIds } = req.body;
-    if (!mediaIds || !Array.isArray(mediaIds)) {
+    if (!mediaIds || !Array.isArray(mediaIds) || mediaIds.length === 0) {
       return res.status(400).json({ error: 'Invalid mediaIds array' });
     }
 
-    for (const id of mediaIds) {
-      const media = await Media.findById(id);
-      if (media) {
-        if (fs.existsSync(media.localPath)) {
-          try { fs.unlinkSync(media.localPath); } catch (e) {}
-        }
-        await Media.findByIdAndDelete(id);
-      }
-    }
+    // Sanity check the download dir once, same as wipe-all.
+    const downloadDir = path.resolve(__dirname, '..', '..', 'media_downloads');
 
-    res.json({ success: true, message: `Deleted ${mediaIds.length} items` });
+    // Fetch every targeted doc in one query, then unlink best-effort
+    // under the same path-sandbox rule as wipe-all, then issue a
+    // single deleteMany. The old code was N round-trips (1 find +
+    // 1 delete per id) and would 500 if any row had a stray
+    // localPath outside the downloads dir.
+    const docs = await Media.find({ _id: { $in: mediaIds } });
+    let filesDeleted = 0;
+    let filesMissing = 0;
+    let filesFailed = 0;
+    for (const m of docs) {
+      if (!m.localPath) { filesMissing += 1; continue; }
+      const resolved = path.resolve(m.localPath);
+      if (!resolved.startsWith(downloadDir + path.sep) && resolved !== downloadDir) {
+        filesFailed += 1;
+        continue;
+      }
+      if (!fs.existsSync(resolved)) { filesMissing += 1; continue; }
+      try { fs.unlinkSync(resolved); filesDeleted += 1; }
+      catch (e) { filesFailed += 1; }
+    }
+    const docResult = await Media.deleteMany({ _id: { $in: mediaIds } });
+
+    res.json({
+      success: true,
+      requested: mediaIds.length,
+      deleted: {
+        docs: docResult.deletedCount || 0,
+        files: filesDeleted,
+        filesMissing,
+        filesFailed,
+        notFound: mediaIds.length - docs.length,
+      },
+    });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: err.message, stack: err.stack });
   }
 };
 
