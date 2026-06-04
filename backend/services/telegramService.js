@@ -100,7 +100,31 @@ async function signIn(phoneNumber, phoneCodeHash, phoneCode, password) {
 
 async function getGroups() {
   if (!client) await initClient();
-  const dialogs = await client.getDialogs({});
+  if (!client) {
+    const err = new Error('Telegram client not initialized. Complete API credentials and sign-in in Settings.');
+    err.code = 'NOT_SIGNED_IN';
+    throw err;
+  }
+  if (!client.connected) await client.connect();
+  // Check whether we actually have an auth key. An empty StringSession
+  // produces a connected-but-unauthenticated client.
+  const sessionString = client.session.save() || '';
+  if (sessionString.length < 8) {
+    const err = new Error('Not signed in to Telegram. Complete the sign-in flow in Settings.');
+    err.code = 'NOT_SIGNED_IN';
+    throw err;
+  }
+  let dialogs;
+  try {
+    dialogs = await client.getDialogs({});
+  } catch (e) {
+    if (e.message && (e.message.includes('AUTH_KEY_UNREGISTERED') || e.message.includes('SESSION_REVOKED'))) {
+      const err = new Error('Telegram session expired or revoked. Please sign in again in Settings.');
+      err.code = 'SESSION_EXPIRED';
+      throw err;
+    }
+    throw e;
+  }
   return dialogs
     .filter(d => d.isGroup || d.isChannel)
     .map(d => ({

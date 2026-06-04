@@ -66,7 +66,17 @@ export default function Dashboard() {
       setTasks(tasksRes.data.tasks || []);
     } catch (err) {
       console.error(err);
-      toast.error('Failed to load dashboard', { description: err.message });
+      // Telegram sign-in errors carry a code from the backend. Show an
+      // actionable message instead of the raw 500.
+      const code = err.response?.data?.code;
+      if (code === 'NOT_SIGNED_IN' || code === 'SESSION_EXPIRED') {
+        toast.error('Telegram not connected', {
+          description: 'Open Settings to complete sign-in.',
+          action: { label: 'Open Settings', onClick: () => navigate('/settings') },
+        });
+      } else {
+        toast.error('Failed to load dashboard', { description: err.message });
+      }
     } finally {
       setLoading(false);
     }

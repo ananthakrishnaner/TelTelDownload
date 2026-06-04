@@ -40,7 +40,8 @@ exports.getGroups = async (req, res) => {
     const groups = await telegramService.getGroups();
     res.json({ groups });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('[telegram/groups] failed:', err);
+    res.status(500).json({ error: err.message, code: err.code || 'TELEGRAM_ERROR' });
   }
 };
 
