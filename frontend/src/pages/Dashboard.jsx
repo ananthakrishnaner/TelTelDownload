@@ -49,6 +49,13 @@ export default function Dashboard() {
             const next = { ...prev };
             delete next[data.groupId];
             return next;
+          });
+          fetchData(); // Refresh stats
+        }, 3000);
+      }
+
+      setFileProgresses(prev => ({
+        ...prev,
         [data.groupId]: { fileName: data.fileName, progress: data.progress, type: data.type }
       }));
     });
