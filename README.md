@@ -101,6 +101,15 @@ sequenceDiagram
     Note over I,M: Index population (separate flow)<br/>Backend downloads video → ffmpeg extracts 5 frames →<br/>pHash each → Mongo (per-frame thumbs + hashes)
 ```
 
+### Core Systems
+
+- **Telegram MTProto Client**: The Node backend connects directly to Telegram's core MTProto API using `gramjs`. It uses a full user login flow (OTP + 2FA cloud password) to authenticate as a user rather than a bot. The resulting session string is encrypted and persisted in MongoDB, allowing seamless reconnection across container restarts.
+- **Background Task Scheduling**: Media fetching is automated via a robust cron-based scheduling engine running in the Node backend. Schedules and task metadata are stored in MongoDB. The engine polls targeted Telegram channels and keeps track of the last processed message IDs, ensuring that downloads resume precisely where they left off without duplicating files.
+- **Rust Indexer & Media Search**: To support the "Find by Photo" reverse image search, the stack includes a dedicated, highly optimized Rust microservice. 
+  - **HEIC/HEIF Support**: It leverages C bindings (`libheif`) to natively decode iPhone HEIC photos uploaded by the user.
+  - **Video Frame Extraction**: It orchestrates `ffmpeg` to extract keyframes from downloaded Telegram videos inside the shared `media_downloads` volume.
+  - **In-Memory Search**: It calculates Perceptual Hashes (pHash) for all media and caches the index entirely in-memory, providing microsecond-level visually similar search lookups via Hamming distance calculations.
+
 ### Container responsibilities
 
 | Service | Port | Public? | Role |
