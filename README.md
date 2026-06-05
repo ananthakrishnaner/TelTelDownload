@@ -96,7 +96,7 @@ sequenceDiagram
     I-->>B: top-K matches + query_phash
     B-->>N: 200 JSON
     N-->>F: top-K matches
-    F-->>U: Result cards; click → /media?open=<id>
+    F-->>U: Result cards; click → /media?open=[id]
 
     Note over I,M: Index population (separate flow)<br/>Backend downloads video → ffmpeg extracts 5 frames →<br/>pHash each → Mongo (per-frame thumbs + hashes)
 ```
