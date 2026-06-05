@@ -16,7 +16,7 @@ FROM rust:1.96-bookworm AS build
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config ca-certificates cmake nasm \
-    libde265-dev libaom-dev libdav1d-dev librav1e-dev libgav1-dev \
+    libde265-dev libaom-dev libdav1d-dev \
  && rm -rf /var/lib/apt/lists/*
 # Cache deps separately from source so source changes don't bust the cache.
 # `Cargo.lock` is committed in-repo for reproducibility; the `*` glob on
@@ -45,7 +45,7 @@ FROM debian:bookworm-slim
 # refuse HEIC uploads with "Plugin not loaded".
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg=7:5.1* ca-certificates libstdc++6 wget \
-    libde265-0 libaom3 libdav1d7 \
+    libde265-0 libaom3 libdav1d6 \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /usr/local/bin
 COPY --from=build /app/target/release/teltel_indexer /usr/local/bin/teltel_indexer
