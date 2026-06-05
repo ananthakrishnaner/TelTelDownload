@@ -8,6 +8,9 @@ router.post('/sign-in', telegramController.signIn);
 router.get('/groups', telegramController.getGroups);
 router.get('/group-media/:id', telegramController.getGroupMedia);
 router.get('/active-jobs', telegramController.getActiveJobs);
+router.get('/jobs/:id', telegramController.getJob);
+// Alias for older clients (Dashboard.jsx and external scripts).
+router.get('/active-jobs/:id', telegramController.getJob);
 router.get('/job-history', telegramController.getJobHistory);
 router.post('/stop-job/:id', telegramController.stopJob);
 // Alias for older clients (Dashboard.jsx and external scripts).

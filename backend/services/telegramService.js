@@ -590,31 +590,93 @@ async function getRecentMedia(groupId) {
 
 async function forwardLocalMedia(mediaId, targetGroupId) {
   const client = await requireClient();
+  const jobId = uuidv4();
   const media = await Media.findById(mediaId);
-  if (!media || !fs.existsSync(media.localPath)) throw new Error('File not found locally');
 
-  progressEmitter.byteProgress({ groupId: targetGroupId, msgId: media.telegramMessageId, fileName: media.fileName, type: 'upload', current: 0, total: 1 });
-  const targetEntity = await retryWithBackoff(() => client.getEntity(targetGroupId));
-  await retryWithBackoff(
-    () => client.sendFile(targetEntity, {
-      file: media.localPath,
-      caption: media.caption || '',
-      progressCallback: (uploaded, total) => {
-        progressEmitter.byteProgress({ groupId: targetGroupId, msgId: media.telegramMessageId, fileName: media.fileName, type: 'upload', current: uploaded, total });
-      },
-    }),
-  );
+  // Initial validation BEFORE we start the job — surface "file not
+  // found" / "media not in vault" as a real error to the caller, not
+  // a silently-failed job. The previous fire-and-forget code returned
+  // 200 in this branch, which is what caused the "Forwarded toast but
+  // nothing happened" user report.
+  if (!media) throw new Error('Media not found in vault');
+  if (!fs.existsSync(media.localPath)) throw new Error('File not found locally');
 
-  media.status = 'uploaded_to_group';
-  media.uploadedAt = Date.now();
-  await media.save();
-  progressEmitter.fileFinished({ groupId: targetGroupId, msgId: media.telegramMessageId, fileName: media.fileName, type: 'upload_complete' });
-  try {
-    fs.unlinkSync(media.localPath);
-    media.status = 'deleted_locally';
-    await media.save();
-  } catch (e) { console.error('Failed to delete file after forward:', e); }
-  return true;
+  // Track the upload as a single-item job so the UI can poll for
+  // completion and the Active Jobs page shows it in the right column.
+  progressEmitter.startJob({
+    jobId,
+    type: 'single_upload',
+    groupId: targetGroupId,
+    taskName: media.fileName,
+    total: 1,
+  });
+  progressEmitter.setCurrentFile(jobId, {
+    msgId: media.telegramMessageId,
+    fileName: media.fileName,
+    type: 'upload',
+    current: 0,
+    total: 1,
+  });
+  progressEmitter.log(jobId, 'info', `Forwarding ${media.fileName} → ${targetGroupId}`);
+
+  // Run the actual upload asynchronously. The caller (controller)
+  // gets the jobId back immediately and can poll
+  // GET /api/jobs/:id for status. We must NOT await this — the
+  // controller's "initiated" response is the only signal the user
+  // gets that the request reached the server, and we want the
+  // frontend to start polling right away.
+  (async () => {
+    try {
+      const targetEntity = await retryWithBackoff(() => client.getEntity(targetGroupId));
+      await retryWithBackoff(
+        () => client.sendFile(targetEntity, {
+          file: media.localPath,
+          caption: media.caption || '',
+          progressCallback: (uploaded, total) => {
+            progressEmitter.byteProgress({
+              jobId,
+              groupId: targetGroupId,
+              msgId: media.telegramMessageId,
+              fileName: media.fileName,
+              type: 'upload',
+              current: uploaded,
+              total,
+            });
+          },
+        }),
+      );
+
+      // Refresh the media doc — the controller may have reloaded it
+      // mid-flight, so we work with a fresh copy for the status flip.
+      const fresh = await Media.findById(mediaId);
+      if (fresh) {
+        fresh.status = 'uploaded_to_group';
+        fresh.uploadedAt = Date.now();
+        await fresh.save();
+      }
+      progressEmitter.fileFinished({ groupId: targetGroupId, msgId: media.telegramMessageId, fileName: media.fileName, type: 'upload_complete' });
+      try {
+        fs.unlinkSync(media.localPath);
+        if (fresh) {
+          fresh.status = 'deleted_locally';
+          await fresh.save();
+        }
+      } catch (e) {
+        // Don't fail the whole job on a local-unlink hiccup — the
+        // remote upload already succeeded. Just log it.
+        progressEmitter.log(jobId, 'warning', `Local unlink failed: ${e.message}`);
+      }
+      progressEmitter.fileCompleted(jobId, { groupId: targetGroupId, msgId: media.telegramMessageId, fileName: media.fileName });
+      progressEmitter.log(jobId, 'info', `Forwarded ${media.fileName} successfully`);
+      progressEmitter.endJob(jobId, { status: 'completed' });
+    } catch (err) {
+      progressEmitter.fileFailed(jobId, { groupId: targetGroupId, msgId: media.telegramMessageId, fileName: media.fileName, error: err });
+      progressEmitter.log(jobId, 'error', `Forward failed: ${err.message}`);
+      progressEmitter.endJob(jobId, { status: 'failed' });
+    }
+  })();
+
+  return { jobId };
 }
 
 async function bulkForwardLocalMedia(mediaIds, targetGroupId) {

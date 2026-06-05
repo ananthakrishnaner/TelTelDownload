@@ -361,14 +361,18 @@ exports.bulkRetryMedia = async (req, res) => {
 exports.forwardMedia = async (req, res) => {
   try {
     const { targetGroupId } = req.body;
+    if (!targetGroupId) {
+      return res.status(400).json({ error: 'targetGroupId is required' });
+    }
     const telegramService = require('../services/telegramService');
-    telegramService.forwardLocalMedia(req.params.id, targetGroupId)
-      .then(() => console.log('Forwarded media ' + req.params.id))
-      .catch(err => console.error(err));
-      
-    res.json({ success: true, message: 'Forwarding initiated' });
+    // forwardLocalMedia now returns a jobId synchronously after
+    // initial validation passes. The actual upload runs in the
+    // background; the frontend polls /api/jobs/:id for status.
+    const { jobId } = await telegramService.forwardLocalMedia(req.params.id, targetGroupId);
+    res.json({ success: true, jobId, message: 'Forwarding initiated' });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('[forwardMedia] failed to initiate:', err);
+    res.status(500).json({ error: err.message, code: err.code || 'FORWARD_INIT_ERROR' });
   }
 };
 

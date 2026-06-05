@@ -89,6 +89,27 @@ exports.getJobHistory = async (req, res) => {
   }
 };
 
+// Poll a single in-memory job by id. Returns the same shape as
+// `snapshotForIds` entries: status, current, total, failed, etc.
+// Used by the frontend to wait for a fire-and-forget single-item
+// forward to finish so it can show a real success/error toast.
+exports.getJob = (req, res) => {
+  try {
+    const telegramService = require('../services/telegramService');
+    const jobs = telegramService.getActiveJobs();
+    const job = jobs.find((j) => j.id === req.params.id);
+    if (!job) {
+      // Job may have already been evicted (the emitter keeps state
+      // for ~10s after endJob). Return a 404 with the id so the
+      // frontend can decide whether to treat it as done or unknown.
+      return res.status(404).json({ error: 'Job not found', jobId: req.params.id });
+    }
+    res.json({ job });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
 exports.stopJob = (req, res) => {
   try {
     const success = telegramService.stopJob(req.params.id);

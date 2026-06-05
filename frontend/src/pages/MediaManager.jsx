@@ -229,17 +229,62 @@ export default function MediaManager() {
     }
   };
 
+  // Poll a single-job status. The single-item forward is fire-and-
+  // forget server-side: the response returns a jobId immediately, and
+  // the actual `client.sendFile()` runs in the background. Without
+  // polling, the UI shows "Forwarded" before the upload completes,
+  // so a silent failure (target group not joined, Telegram rate-
+  // limit, etc.) was invisible to the user. We poll
+  // GET /api/jobs/:id every 1.2s and resolve only when the job
+  // reaches a terminal state (completed | failed | partial). The
+  // 30s hard timeout covers pathological hangs.
+  const pollJob = async (jobId, { timeoutMs = 30_000, intervalMs = 1200 } = {}) => {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const r = await api.get(`/telegram/jobs/${jobId}`);
+      const job = r.data?.job;
+      if (job && (job.status === 'completed' || job.status === 'failed' || job.status === 'partial' || job.status === 'aborted')) {
+        return job;
+      }
+      await new Promise((res) => setTimeout(res, intervalMs));
+    }
+    return null; // timed out
+  };
+
   const handleForward = async (item) => {
     if (!forwardDrawer.target) {
       toast.error('Pick a destination first');
       return;
     }
     try {
-      await api.post(`/media/${item._id}/forward`, { targetGroupId: forwardDrawer.target });
-      toast.success('Forwarded', { description: item.fileName });
+      const res = await api.post(`/media/${item._id}/forward`, { targetGroupId: forwardDrawer.target });
+      const jobId = res.data?.jobId;
       setForwardDrawer({ open: false, target: forwardDrawer.target });
+      // The current toast API is append-only (capped at 3 visible),
+      // so we just show a "uploading" toast and then a final
+      // success/error toast below once we know the real result.
+      toast.info(`Forwarding ${item.fileName}…`, { description: 'uploading to group' });
+      if (!jobId) {
+        // Server didn't return a jobId (very old backend). Fall back
+        // to the old fire-and-forget UX.
+        toast.success('Forwarded', { description: item.fileName });
+        return;
+      }
+      const job = await pollJob(jobId);
+      if (!job) {
+        toast.warning('Forward is taking longer than expected', { description: `${item.fileName} · check Active Jobs` });
+        return;
+      }
+      if (job.status === 'completed') {
+        toast.success('Forwarded', { description: item.fileName });
+      } else {
+        // Pull the most recent error from the job log (progressEmitter
+        // appends `kind: 'fail'` entries with the actual error).
+        const fail = (job.recentLog || []).slice().reverse().find((e) => e.kind === 'fail' || e.level === 'error');
+        toast.error('Forward failed', { description: fail?.message || job.status });
+      }
     } catch (err) {
-      toast.error('Forward failed', { description: err.message });
+      toast.error('Forward failed', { description: err.response?.data?.error || err.message });
     }
   };
 
