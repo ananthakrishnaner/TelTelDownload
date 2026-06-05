@@ -14,6 +14,7 @@ use std::path::PathBuf;
 
 use crate::error::ApiError;
 use crate::ffmpeg;
+use crate::heic;
 use crate::mongo::{self, Frame};
 use crate::phash::phash as compute_phash;
 use crate::search::top_k;
@@ -159,7 +160,12 @@ pub struct SearchResp {
 }
 
 const MAX_IMAGE_BYTES: usize = 25 * 1024 * 1024;
-const ALLOWED_IMAGE_FORMATS: &[&str] = &["jpeg", "jpg", "png", "webp", "gif", "bmp"];
+// MIME `image/<suffix>` allowlist. HEIC/HEIF go through the libheif
+// path in `heic.rs` regardless of this list — see the magic-bytes
+// sniff below. Keeping them in this list lets the content-type
+// precheck pass so we don't 415 a HEIC upload that the browser
+// correctly tagged as `image/heic`.
+const ALLOWED_IMAGE_FORMATS: &[&str] = &["jpeg", "jpg", "png", "webp", "gif", "bmp", "tiff", "heic", "heif", "heix"];
 
 #[post("/search")]
 pub async fn search(
@@ -207,9 +213,16 @@ pub async fn search(
         return Err(ApiError::BadRequest("empty image field".into()));
     }
 
-    // Decode + pHash the probe.
-    let img = image::load_from_memory(&bytes)
-        .map_err(|e| ApiError::BadRequest(format!("decode probe image: {}", e)))?;
+    // Decode + pHash the probe. iOS photos arrive as HEIC, which
+    // the `image` crate can't handle — sniff the ISOBMFF magic and
+    // route to libheif if needed. Everything else goes through the
+    // standard `image::load_from_memory` (jpeg/png/webp/gif/bmp/tiff).
+    let img = if heic::is_heic(&bytes) {
+        heic::decode_heic(&bytes)?
+    } else {
+        image::load_from_memory(&bytes)
+            .map_err(|e| ApiError::BadRequest(format!("decode probe image: {}", e)))?
+    };
     let query_hash = compute_phash(&img);
 
     // Top-K over the in-memory index.

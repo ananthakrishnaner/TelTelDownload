@@ -5,10 +5,18 @@
 # which was only stabilized in Rust 1.85. Bumping the toolchain
 # is the long-term fix; pinning the crate down is fragile because
 # the next dep upgrade would re-introduce the same break.
+#
+# The HEIC/HEIF (iPhone photo) decoder pulls in libheif's codec
+# plugins: libde265 for HEVC, libaom for AV1, and the dav1d decoder
+# for AVIF. The `libheif-sys` crate is built with
+# `embedded-libheif` which statically links libheif 1.23 itself, but
+# the codec plugins remain dynamic — the build links against the
+# system .so files at compile time.
 FROM rust:1.96-bookworm AS build
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    pkg-config ca-certificates \
+    pkg-config ca-certificates cmake nasm \
+    libde265-dev libaom-dev libdav1d-dev librav1e-dev libgav1-dev \
  && rm -rf /var/lib/apt/lists/*
 # Cache deps separately from source so source changes don't bust the cache.
 # `Cargo.lock` is committed in-repo for reproducibility; the `*` glob on
@@ -30,8 +38,14 @@ FROM debian:bookworm-slim
 # bookworm + bookworm-security). 6.x and 7.x are no longer in bookworm
 # (they're in trixie, the new stable), so cross-pinning would require a
 # trixie backports source — not worth the fragility for dHash.
+#
+# The HEIC/HEIF codec shared libraries (libde265, libaom, libdav1d)
+# are also installed at runtime so the embedded libheif can dlopen
+# the codec plugins from the system. Without these, libheif would
+# refuse HEIC uploads with "Plugin not loaded".
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg=7:5.1* ca-certificates libstdc++6 wget \
+    libde265-0 libaom3 libdav1d7 \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /usr/local/bin
 COPY --from=build /app/target/release/teltel_indexer /usr/local/bin/teltel_indexer

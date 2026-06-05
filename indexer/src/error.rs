@@ -49,12 +49,18 @@ impl From<anyhow::Error> for ApiError {
 impl ResponseError for ApiError {
     fn status_code(&self) -> StatusCode {
         match self {
-            ApiError::BadRequest(_) | ApiError::Multipart(_) => StatusCode::BAD_REQUEST,
+            ApiError::BadRequest(_) | ApiError::Multipart(_) | ApiError::Image(_) => {
+                // Image decode failures are 400s: the user uploaded a
+                // file the server can't process, not an internal fault.
+                // The detailed `error` body still tells them what was
+                // wrong (e.g. "decode probe image: ...").
+                StatusCode::BAD_REQUEST
+            }
             ApiError::NotFound(_) => StatusCode::NOT_FOUND,
             ApiError::UnsupportedMediaType(_) => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             ApiError::PayloadTooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
             ApiError::FrameExtraction(_) => StatusCode::UNPROCESSABLE_ENTITY,
-            ApiError::Mongo(_) | ApiError::Io(_) | ApiError::Image(_) | ApiError::Internal(_) => {
+            ApiError::Mongo(_) | ApiError::Io(_) | ApiError::Internal(_) => {
                 StatusCode::INTERNAL_SERVER_ERROR
             }
         }

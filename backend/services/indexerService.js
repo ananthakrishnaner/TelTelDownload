@@ -17,7 +17,7 @@ const path = require('path');
 const INDEXER_URL = process.env.INDEXER_URL || 'http://indexer:9000';
 const INDEXER_MEDIA_DIR = process.env.INDEXER_MEDIA_DIR || '/media';
 
-const CLIENT_TIMEOUT_MS = 30_000;
+const CLIENT_TIMEOUT_MS = 60_000;
 const MAX_RETRIES = 2;
 const RETRY_BACKOFF_MS = 500;
 const CB_FAIL_THRESHOLD = 5;

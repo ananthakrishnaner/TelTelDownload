@@ -3,6 +3,7 @@
 mod error;
 mod ffmpeg;
 mod handlers;
+mod heic;
 mod mongo;
 mod phash;
 mod search;

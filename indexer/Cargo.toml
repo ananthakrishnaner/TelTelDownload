@@ -11,7 +11,17 @@ serde            = { version = "1", features = ["derive"] }
 serde_json       = "1"
 mongodb          = "3"
 bson             = { version = "2", features = ["chrono-0_4"] }
-image            = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif", "bmp"] }
+image            = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif", "bmp", "tiff"] }
+# HEIC/HEIF (iPhone photos) decode. The `image` crate doesn't support
+# HEIC natively, so we pull in `libheif-sys` with the embedded
+# libheif feature — that bundles libheif 1.23 (statically linked) and
+# leaves only the codec system deps (libde265 for HEVC, libaom for
+# AV1) for the package manager. We use it from `heic.rs` and convert
+# the decoded pixels to a `DynamicImage` so the existing pHash path
+# works unchanged.
+libheif-sys      = { version = "5.3.0", default-features = false, features = ["embedded-libheif", "latest"] }
+scopeguard       = "1"
+libc             = "0.2"
 anyhow           = "1"
 thiserror        = "1"
 tracing          = "0.1"
