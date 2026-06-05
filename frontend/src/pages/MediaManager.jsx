@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { FiImage, FiVideo, FiSearch, FiCheck, FiAlertTriangle, FiRefreshCw, FiTrash2, FiCamera } from 'react-icons/fi';
 import api from '../services/api';
 import { toast } from '../hooks/useToast';
@@ -27,6 +28,7 @@ function isPhoto(name = '') { return /\.(jpe?g|png|gif|webp)$/i.test(name); }
 function isVideo(name = '') { return /\.(mp4|webm|mov)$/i.test(name); }
 
 export default function MediaManager() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [media, setMedia] = useState([]);
   const [selected, setSelected] = useState([]);
   const [groups, setGroups] = useState([]);
@@ -299,6 +301,48 @@ export default function MediaManager() {
       return true;
     });
   }, [media, typeFilter, statusFilter, search]);
+
+  // Handoff from the global LookupModal. When the user picks a match
+  // anywhere in the app, we navigate here with ?open=<media_id>.
+  // Once the media list is loaded, we resolve the id against
+  // `filtered` (respecting the current filters) and open the
+  // lightbox. If the id isn't in the current filter, we clear the
+  // filters and re-resolve against the unfiltered `media` list.
+  // We always remove the param afterward so a refresh doesn't keep
+  // re-opening the lightbox.
+  //
+  // The `seen` ref guards against running the resolver twice for
+  // the same id (the effect can re-fire on `media`/filter changes
+  // before we strip the param).
+  //
+  // We disable `react-hooks/set-state-in-effect` here because this
+  // IS the "subscribe to external signal (URL) → setState" pattern
+  // the rule allows; the lint heuristic just doesn't recognize it.
+  const seenOpenId = useRef(null);
+  useEffect(() => {
+    const openId = searchParams.get('open');
+    if (!openId || seenOpenId.current === openId) return;
+    if (loading || media.length === 0) return; // wait for fetch
+    seenOpenId.current = openId;
+    const inFiltered = filtered.findIndex((m) => String(m._id) === String(openId));
+    if (inFiltered >= 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setLightboxIndex(inFiltered);
+    } else {
+      // Drop active filters so the matching item is reachable.
+      setTypeFilter('all');
+      setStatusFilter('all');
+      setSearch('');
+      const idx = media.findIndex((m) => String(m._id) === String(openId));
+      if (idx >= 0) {
+        setLightboxIndex(idx);
+      }
+    }
+    // Strip the param so a manual refresh doesn't reopen the modal.
+    const next = new URLSearchParams(searchParams);
+    next.delete('open');
+    setSearchParams(next, { replace: true });
+  }, [searchParams, loading, media, filtered, setSearchParams]);
 
   const toggleSelect = (id) => setSelected((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
   const selectAll = () => setSelected((prev) => prev.length === filtered.length ? [] : filtered.map((m) => m._id));

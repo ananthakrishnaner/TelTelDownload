@@ -10,6 +10,7 @@ import Scheduler from './pages/Scheduler';
 import ChannelDetail from './pages/ChannelDetail';
 import Sidebar from './components/Sidebar';
 import Toaster from './components/Toaster';
+import GlobalSearchButton from './components/GlobalSearchButton';
 import useShortcuts from './hooks/useShortcuts';
 import { SessionStatusProvider } from './hooks/useSessionStatus';
 
@@ -23,6 +24,8 @@ const ProtectedRoute = ({ children }) => {
       <div className="flex-1 overflow-auto pb-16 md:pb-0">
         {children}
       </div>
+      {/* Always-visible "Find by Photo" entry point — see component. */}
+      <GlobalSearchButton />
     </div>
   );
 };
