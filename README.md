@@ -96,7 +96,7 @@ sequenceDiagram
     I-->>B: top-K matches + query_phash
     B-->>N: 200 JSON
     N-->>F: top-K matches
-    F-->>U: Result cards; click opens media viewer
+    F-->>U: Result cards, click opens media viewer
     Note over I,M: Index population happens asynchronously. Backend downloads video, extracts frames, hashes them, and saves to Mongo.
 ```
 
