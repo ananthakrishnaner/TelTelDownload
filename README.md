@@ -96,9 +96,8 @@ sequenceDiagram
     I-->>B: top-K matches + query_phash
     B-->>N: 200 JSON
     N-->>F: top-K matches
-    F-->>U: Result cards; click → /media?open=[id]
-
-    Note over I,M: Index population (separate flow)<br/>Backend downloads video → ffmpeg extracts 5 frames →<br/>pHash each → Mongo (per-frame thumbs + hashes)
+    F-->>U: Result cards; click opens media viewer
+    Note over I,M: Index population happens asynchronously. Backend downloads video, extracts frames, hashes them, and saves to Mongo.
 ```
 
 ### Core Systems
