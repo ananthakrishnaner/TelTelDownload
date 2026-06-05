@@ -100,6 +100,44 @@ sequenceDiagram
     Note over I,M: Index population happens asynchronously. Backend downloads video, extracts frames, hashes them, and saves to Mongo.
 ```
 
+### Indexer & Reverse Image Search Architecture
+
+The "Find by Photo" functionality relies on a dedicated Rust microservice that manages both media ingestion (indexing) and live querying (searching).
+
+```mermaid
+flowchart TD
+    subgraph Search["Search Flow"]
+        Upload([User Uploads Query Image]) --> Sniff{Detect Magic Bytes}
+        Sniff -- "ftypheic/heif" --> LibHeif[Decode via libheif C-bindings]
+        Sniff -- "JPEG/PNG/etc" --> ImageCrate[Decode via standard image crate]
+        
+        LibHeif --> pHashQuery[Generate 64-bit Perceptual Hash]
+        ImageCrate --> pHashQuery
+        
+        pHashQuery --> HammingCalc{Compute Hamming Distance}
+    end
+
+    subgraph Index["In-Memory Index"]
+        MemDB[(In-Memory Cache)] 
+    end
+
+    subgraph Ingestion["Media Ingestion Flow"]
+        NewMedia([Node.js Downloads New Video]) --> FFmpeg[Trigger ffmpeg extraction]
+        FFmpeg --> ExtractedFrames[Extract 5 Keyframes from video]
+        ExtractedFrames --> pHashIngest[Generate pHash for each frame]
+        pHashIngest --> MongoDB[(MongoDB)]
+        MongoDB -- "Syncs every 30s" --> MemDB
+    end
+
+    MemDB --> HammingCalc
+    HammingCalc --> Results[Return Top-K matches < Distance Threshold]
+
+    classDef proc fill:#f9f0ff,stroke:#722ed1,color:#000
+    classDef store fill:#e6f4ff,stroke:#1677ff,color:#000
+    class LibHeif,ImageCrate,FFmpeg,pHashQuery,pHashIngest proc
+    class MemDB,MongoDB store
+```
+
 ### Core Systems
 
 - **Telegram MTProto Client**: The Node backend connects directly to Telegram's core MTProto API using `gramjs`. It uses a full user login flow (OTP + 2FA cloud password) to authenticate as a user rather than a bot. The resulting session string is encrypted and persisted in MongoDB, allowing seamless reconnection across container restarts.
