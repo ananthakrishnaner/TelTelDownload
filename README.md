@@ -63,7 +63,7 @@ flowchart LR
     class Nginx public
     class Frontend,Backend,Indexer compose
     class Mongo,Media store
-    class User, TG ext
+    class User,TG ext
 ```
 
 ### Key boundaries
